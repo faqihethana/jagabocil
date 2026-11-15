@@ -1,0 +1,13 @@
+services:
+  api:
+    build: ./server
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gemini-4-hydrogen}
+    volumes:
+      - family-data:/app/data
+    restart: unless-stopped
+volumes:
+  family-data:

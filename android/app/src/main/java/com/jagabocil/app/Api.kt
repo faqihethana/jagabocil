@@ -1,0 +1,86 @@
+package com.jagabocil.app
+
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import androidx.core.content.edit
+import java.io.File
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
+
+class ApiError(val status: Int, message: String) : Exception(message)
+class Api(var baseUrl: String, var token: String = "") {
+    val json = Json { ignoreUnknownKeys = true }
+    private val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(65, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS)
+        .followRedirects(false).followSslRedirects(false).build()
+    fun body(vararg values: Pair<String, String>) = buildJsonObject { values.forEach { put(it.first, it.second) } }.toString()
+        .toRequestBody("application/json".toMediaType())
+    suspend fun request(path: String, method: String = "GET", body: RequestBody? = null): String = withContext(Dispatchers.IO) {
+        val builder = Request.Builder().url(baseUrl.trimEnd('/') + path)
+            .method(method, body ?: if (method in listOf("POST", "PUT")) "{}".toRequestBody("application/json".toMediaType()) else null)
+        if (token.isNotBlank()) builder.header("Authorization", "Bearer $token")
+        http.newCall(builder.build()).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw ApiError(response.code,
+                runCatching { json.parseToJsonElement(text).jsonObject["message"]?.jsonPrimitive?.content }.getOrNull() ?: "Tidak bisa terhubung (${response.code}).")
+            text
+        }
+    }
+    suspend fun dashboard() = json.decodeFromString<Dashboard>(request("/dashboard"))
+    suspend fun audio(id: String, file: File) = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("${baseUrl.trimEnd('/')}/recitations/$id/audio").header("Authorization", "Bearer $token").build()
+        http.newCall(request).execute().use {
+            if (!it.isSuccessful) throw ApiError(it.code, "Rekaman belum bisa diputar.")
+            it.body?.byteStream()?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+        }
+    }
+    suspend fun upload(file: File, surahId: String) = request("/recitations", "POST", MultipartBody.Builder().setType(MultipartBody.FORM)
+        .addFormDataPart("surahId", surahId)
+        .addFormDataPart("audio", "ngaji.m4a", file.asRequestBody("audio/mp4".toMediaType())).build())
+}
+
+// The bearer token is encrypted with a device-bound, non-exportable Android Keystore key.
+class SessionStore(context: Context) {
+    private val prefs = context.getSharedPreferences("session", Context.MODE_PRIVATE)
+    private fun key(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        return (store.getKey("jagabocil_session", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+            init(KeyGenParameterSpec.Builder("jagabocil_session", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+        }.generateKey()
+    }
+    fun save(token: String, baseUrl: String) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        prefs.edit {
+            putString("token", Base64.encodeToString(cipher.doFinal(token.toByteArray()), Base64.NO_WRAP))
+            putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)); putString("server", baseUrl)
+        }
+    }
+    fun token() = runCatching {
+        val encrypted = prefs.getString("token", null) ?: return@runCatching ""
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(prefs.getString("iv", ""), Base64.NO_WRAP))) }
+        String(cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP)))
+    }.getOrDefault("")
+    fun server() = prefs.getString("server", if (BuildConfig.DEBUG) "http://10.0.2.2:8787" else "").orEmpty()
+    fun clear() { prefs.edit { remove("token"); remove("iv") } }
+}
