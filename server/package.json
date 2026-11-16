@@ -4,11 +4,11 @@
   "description": "API keluarga, rekaman ngaji, dan izin remote TV JagaBocil",
   "scripts": {
     "test": "tsx --test test/*.test.ts",
-    "dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=.env.local src/index.ts",
+    "dev": "tsx watch --use-env-proxy --env-file-if-exists=.env --env-file-if-exists=.env.local src/index.ts",
     "build": "tsc",
-    "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local dist/index.js",
+    "start": "node --use-env-proxy --env-file-if-exists=.env --env-file-if-exists=.env.local dist/index.js",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "tsx --env-file-if-exists=.env.local src/migrate.ts"
+    "db:migrate": "tsx --use-env-proxy --env-file-if-exists=.env.local src/migrate.ts"
   },
   "license": "UNLICENSED",
   "type": "module",
@@ -32,6 +32,6 @@
   },
   "private": true,
   "engines": {
-    "node": ">=24"
+    "node": ">=24.5.0"
   }
 }

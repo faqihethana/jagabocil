@@ -30,7 +30,7 @@ AI membantu mengenali isi bacaan, belum menjamin tajwid, identitas pembaca, atau
 
 ## Menjalankan API
 
-Prasyarat: **Node.js 24+**, npm, dan `ffprobe` dari paket **FFmpeg** di PATH.
+Prasyarat: **Node.js 24.5+**, npm, dan `ffprobe` dari paket **FFmpeg** di PATH.
 
 ```sh
 cd server

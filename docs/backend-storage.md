@@ -47,14 +47,14 @@ npm run build
 # .env.local untuk branch pengembangan:
 npm run db:migrate
 # Production, jika file rahasia ini disediakan lokal:
-node --env-file=.env.production.local dist/migrate.js
+node --use-env-proxy --env-file=.env.production.local dist/migrate.js
 ```
 
-Runtime normal hanya memeriksa schema yang sudah dimigrasikan. `DATABASE_AUTO_MIGRATE=true` tersedia untuk setup yang sengaja menjalankan migrasi saat startup. Pada host yang menyuntikkan environment, jalankan `node dist/migrate.js` untuk migrasi dan `node dist/index.js` untuk API. Dockerfile juga memakai `node dist/index.js`.
+Runtime normal hanya memeriksa schema yang sudah dimigrasikan. `DATABASE_AUTO_MIGRATE=true` tersedia untuk setup yang sengaja menjalankan migrasi saat startup. Pada host yang menyuntikkan environment, jalankan `node --use-env-proxy dist/migrate.js` untuk migrasi dan `node --use-env-proxy dist/index.js` untuk API. Dockerfile memakai flag yang sama.
 
 Neon menggunakan driver HTTP melalui HTTPS; Postgres biasa/lokal memakai pool `pg`. Semua tabel aplikasi diberi nama schema secara eksplisit, sehingga tidak bergantung pada `search_path` dari koneksi pool. Pairing dikonsumsi atomik, izin power tetap satu SQL update, dan perubahan aturan/pencabutan perangkat memakai transaksi.
 
-Pada lingkungan yang menggunakan proxy HTTP/HTTPS, Node 24 dapat memakai `NODE_USE_ENV_PROXY=1` agar koneksi HTTPS Neon dan S3 mengikuti proxy yang tersedia. Konfigurasi lokal workspace sudah menyertakannya. TLS tetap diverifikasi; jangan menonaktifkan pemeriksaan sertifikat.
+Pada lingkungan yang menggunakan proxy HTTP/HTTPS, gunakan Node 24.5+ dengan flag `--use-env-proxy` saat startup agar koneksi HTTPS Neon dan S3 mengikuti proxy yang tersedia. Script npm dan Dockerfile sudah menyertakannya; mengisi `NODE_USE_ENV_PROXY` hanya di file dotenv tidak cukup pada semua versi Node. Tanpa proxy yang dikonfigurasi, koneksi tetap langsung. TLS tetap diverifikasi; jangan menonaktifkan pemeriksaan sertifikat.
 
 SQLite lama tetap dapat dibuka dengan mengosongkan `DATABASE_URL`; migrasi SQLite sebelumnya tetap dipertahankan. **Mengisi DATABASE_URL tidak menyalin data SQLite lama ke Neon secara otomatis.** Simpan backup dan lakukan transfer terencana sebelum mengganti backend yang sudah memiliki pengguna. Pada setup workspace ini tidak ada database SQLite pengguna yang perlu dipindahkan.
 
