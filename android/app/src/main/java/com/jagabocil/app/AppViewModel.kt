@@ -14,6 +14,8 @@ import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -22,6 +24,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SessionStore(application)
     val api = Api(store.server(), store.token())
     val infrared = Infrared(application)
+    val wifiTv = WifiTv(application)
+    val tvRemote = TvWifiRemote(application, wifiTv)
+    var tvPairCodeNeeded by mutableStateOf(false); private set
+    private var foreground = true
     private val recorder = AudioRecorder(application)
     private var player: MediaPlayer? = null
     private var playbackFile: File? = null
@@ -49,7 +55,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try { work() }
             catch (e: Exception) {
-                if (e is ApiError && e.status == 401) { store.clear(); api.token = ""; dashboard = null }
+                if (e is ApiError && e.status == 401) { store.clear(); api.token = ""; dashboard = null; tvRemote.clear(); tvPairCodeNeeded = false }
                 message = when (e) {
                     is ApiError -> e.message
                     is java.io.IOException -> "Server belum bisa dihubungi. Periksa alamat server dan koneksi internet."
@@ -70,7 +76,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         api.token = auth.token; store.save(auth.token, api.baseUrl); load(); screen = "home"
     }
     fun logout() = action {
-        stopPlayback(); discardRecording()
+        stopPlayback(); discardRecording(); tvRemote.clear(); tvPairCodeNeeded = false
         runCatching { api.request("/auth/logout", "POST") }
         api.token = ""; store.clear(); dashboard = null; screen = "home"
     }
@@ -108,7 +114,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         try { recordedFile = recorder.stop() } catch (_: Exception) { recordedFile = null; message = "Rekaman terlalu singkat atau terputus. Yuk, ulangi." }
     }
     fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; seconds = 0 }
-    fun backgrounded() { if (recording) { discardRecording(); message = "Rekaman dihentikan saat aplikasi ditutup. Silakan rekam ulang." }; stopPlayback() }
+    fun foregrounded() { foreground = true }
+    fun backgrounded() { foreground = false; cancelTvPair(); if (recording) { discardRecording(); message = "Rekaman dihentikan saat aplikasi ditutup. Silakan rekam ulang." }; stopPlayback() }
+    fun cancelTvPair() { tvRemote.cancelPair(); tvPairCodeNeeded = false }
+    fun pairTv(c: Child) = action {
+        message = "Nyalakan TV dan setujui JagaBocil pada layar TV jika diminta."
+        val paired = try { tvRemote.pair(c) } catch (error: java.io.IOException) { throw IllegalStateException("TV belum bisa dihubungi. Nyalakan TV, periksa IP dan jaringan Wi-Fi, lalu coba pairing lagi.", error) }
+        if (!foreground) { cancelTvPair(); return@action }
+        tvPairCodeNeeded = !paired
+        if (paired) { load(); message = "TV terhubung ke HP ini. Izin ngaji tetap diperlukan untuk power." }
+    }
+    fun finishTvPair(code: String) = action {
+        try { tvRemote.finishPair(code); load(); message = "Android TV terhubung. Izin ngaji tetap diperlukan untuk power." }
+        finally { tvPairCodeNeeded = false }
+    }
     fun upload() = action {
         val child = dashboard?.children?.firstOrNull() ?: return@action
         val file = recordedFile ?: return@action
@@ -144,11 +163,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun stopPlayback() { player?.release(); player = null; playing = null; playbackFile?.delete(); playbackFile = null }
     fun power(rec: Recitation) = action {
         val c = dashboard?.children?.firstOrNull() ?: return@action
-        infrared.check(c.tvBrand)
-        val result = api.json.decodeFromString<Permit>(api.request("/tv/authorize", "POST", api.body("recitationId" to rec.id)))
-        require(result.authorized && result.expiresAt > serverNow()) { "Izin kedaluwarsa. Minta persetujuan baru." }
-        try { infrared.power(result.tvBrand); message = "Sinyal power dikirim. Arahkan bagian infrared HP ke TV." }
-        finally { load() }
+        val command = if (c.tvTransport == "wifi") tvRemote.prepare(c) else null
+        try {
+            check(foreground) { "Permintaan dibatalkan karena aplikasi ditutup." }
+            if (command == null) infrared.check(c.tvBrand)
+            val result = api.json.decodeFromString<Permit>(api.request("/tv/authorize", "POST", api.body("recitationId" to rec.id, "tvTransport" to c.tvTransport)))
+            require(result.authorized && result.expiresAt > serverNow()) { "Izin kedaluwarsa. Minta persetujuan baru." }
+            check(foreground) { "Permintaan dibatalkan saat aplikasi ditutup. Izin yang sudah digunakan tidak dikembalikan." }
+            require(result.tvTransport == c.tvTransport) { "Metode koneksi TV berubah. Muat ulang pengaturan." }
+            if (result.tvTransport == "wifi") {
+                require(command != null && c.tvMac == result.tvMac && c.tvPlatform == result.tvPlatform && c.tvHost == result.tvHost) { "Alamat TV berubah. Muat ulang pengaturan." }
+                command.send()
+                message = "Permintaan nyalakan dikirim lewat Wi-Fi. Cek layar TV; dukungan standby berbeda pada tiap model."
+            } else { infrared.power(result.tvBrand); message = "Sinyal power dikirim. Arahkan bagian infrared HP ke TV." }
+        }
+        finally { withContext(Dispatchers.IO) { runCatching { command?.close() } }; load() }
     }
-    override fun onCleared() { discardRecording(); stopPlayback(); super.onCleared() }
+    override fun onCleared() { cancelTvPair(); discardRecording(); stopPlayback(); super.onCleared() }
 }

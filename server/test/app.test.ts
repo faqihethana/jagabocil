@@ -151,6 +151,37 @@ test('deleting audio also removes its approval and protected playback', async ()
   assert.equal((await request('GET', `/recitations/${rec.id}/audio`, parent)).statusCode, 404);
   assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 404);
 });
+test('Wi-Fi policy rejects invalid MACs, public hosts, and child changes', async () => {
+  const wifi = { ...policy, tvBrand: 'none', tvTransport: 'wifi', tvPlatform: 'wol', tvMac: '34:12:98:ab:cd:ef' };
+  for (const mac of ['', '00:00:00:00:00:00', 'FF:FF:FF:FF:FF:FF', '01:00:5E:00:00:01', 'not-a-mac']) {
+    assert.equal((await request('PUT', `/children/${childId}/policy`, parent, { ...wifi, tvMac: mac })).statusCode, 400);
+  }
+  for (const host of ['8.8.8.8', '127.0.0.1', '169.254.169.254', 'example.com', '192.168.1.300', '192.168.01.20']) {
+    assert.equal((await request('PUT', `/children/${childId}/policy`, parent, { ...wifi, tvPlatform: 'samsung', tvHost: host })).statusCode, 400);
+  }
+  assert.equal((await request('PUT', `/children/${childId}/policy`, child, wifi)).statusCode, 403);
+});
+test('all four Wi-Fi profiles keep approval, transport compatibility, and single-use rules', async () => {
+  for (const platform of ['wol', 'androidtv', 'samsung', 'lg']) {
+    const wifi = { ...policy, tvBrand: 'none', tvTransport: 'wifi', tvPlatform: platform, tvHost: platform === 'wol' ? '' : '192.168.1.20', tvMac: '34:12:98:ab:cd:ef' };
+    const saved = await request('PUT', `/children/${childId}/policy`, parent, wifi);
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.json().child.tvMac, '34:12:98:AB:CD:EF');
+    const response = await upload(); assert.equal(response.statusCode, 201);
+    const id = response.json().recitation.id;
+    assert.equal((await request('POST', '/tv/authorize', child, { recitationId: id, tvTransport: 'wifi' })).statusCode, 403);
+    await request('POST', `/recitations/${id}/review`, parent, { decision: 'approve' });
+    // Legacy clients and stale transport settings must not consume the grant.
+    assert.equal((await request('POST', '/tv/authorize', child, { recitationId: id })).statusCode, 409);
+    const allowed = await request('POST', '/tv/authorize', child, { recitationId: id, tvTransport: 'wifi', tvHost: '8.8.8.8', tvPlatform: 'injected' });
+    assert.equal(allowed.statusCode, 200);
+    assert.equal(allowed.json().tvPlatform, platform);
+    assert.equal(allowed.json().tvHost, wifi.tvHost);
+    assert.equal(allowed.json().tvTransport, 'wifi');
+    assert.equal((await request('POST', '/tv/authorize', child, { recitationId: id, tvTransport: 'wifi' })).statusCode, 403);
+  }
+  await request('PUT', `/children/${childId}/policy`, parent, policy);
+});
 test('expired pairing cannot be used and parent can revoke child devices', async () => {
   const pairing = (await request('POST', `/children/${childId}/pairing`, parent)).json().pairing;
   now += 11 * 60_000;

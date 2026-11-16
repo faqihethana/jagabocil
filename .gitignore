@@ -5,6 +5,7 @@
 !**/.env.example
 **/data/
 **/.gradle/
+**/.kotlin/
 **/build/
 **/local.properties
 *.jks

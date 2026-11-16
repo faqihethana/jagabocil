@@ -7,6 +7,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class Child(
     val id: String, val name: String, val mode: String, val surahId: String,
     val minSeconds: Int, val unlockMinutes: Int, val tvBrand: String, val aiConsent: Boolean,
+    val tvTransport: String = "infrared", val tvMac: String = "",
+    val tvPlatform: String = "wol", val tvHost: String = "",
 )
 @Serializable data class Recitation(
     val id: String, val childId: String, val surahId: String, val status: String,
@@ -26,5 +28,9 @@ import kotlinx.serialization.Serializable
 @Serializable data class Policy(
     val mode: String, val surahId: String, val minSeconds: Int, val unlockMinutes: Int,
     val tvBrand: String, val aiConsent: Boolean,
+    val tvTransport: String = "infrared", val tvMac: String = "",
+    val tvPlatform: String = "wol", val tvHost: String = "",
 )
-@Serializable data class Permit(val authorized: Boolean, val tvBrand: String, val expiresAt: Long)
+@Serializable data class Permit(val authorized: Boolean, val tvBrand: String, val expiresAt: Long,
+    val tvTransport: String = "infrared", val tvMac: String = "",
+    val tvPlatform: String = "wol", val tvHost: String = "")

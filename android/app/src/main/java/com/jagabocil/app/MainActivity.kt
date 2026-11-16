@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
         vm.screen = if (vm.screen.startsWith("settings:")) "family" else "home"
     }
     DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) vm.backgrounded() }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) vm.backgrounded() else if (event == Lifecycle.Event.ON_START) vm.foregrounded() }
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
@@ -119,6 +119,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+    if (vm.tvPairCodeNeeded) {
+        var code by remember { mutableStateOf("") }
+        AlertDialog(onDismissRequest = vm::cancelTvPair, title = { Text("Kode Android / Google TV") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Masukkan enam karakter pada layar TV, termasuk huruf A–F. Kode berlaku sekitar 90 detik.")
+                Field("Kode di layar TV", code, { code = it.uppercase().filter { ch -> ch in "0123456789ABCDEF" }.take(6) })
+            }
+        }, confirmButton = { TextButton(onClick = { vm.finishTvPair(code) }, enabled = code.length == 6 && !vm.busy) { Text("Hubungkan") } },
+            dismissButton = { TextButton(onClick = vm::cancelTvPair) { Text("Batal") } })
     }
     vm.pairing?.let { code ->
         var now by remember { mutableLongStateOf(vm.serverNow()) }
@@ -205,6 +215,11 @@ class MainActivity : ComponentActivity() {
     LaunchedEffect(Unit) { while (true) { now = vm.serverNow(); delay(1000) } }
     val approved = data.recitations.firstOrNull { it.canUse(now) }
     val pending = data.recitations.any { it.status == "pending" }
+    val wifi = child.tvTransport == "wifi"
+    val connectionProblem = if (wifi) runCatching {
+        if (child.tvPlatform == "wol") vm.wifiTv.prepare(child.tvMac) else vm.wifiTv.endpoint(child.tvHost)
+    }.exceptionOrNull()?.message else if (!vm.infrared.available) "HP ini belum punya IR blaster" else if (child.tvBrand == "none") "Minta orang tua memilih profil TV" else null
+    val paired = !wifi || vm.tvRemote.paired(child)
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Assalamu’alaikum, ${data.name} ☀", color = Muted, fontSize = 14.sp)
         Text("Mulai dengan\nsatu kebaikan.", fontSize = 32.sp, lineHeight = 38.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp)
@@ -225,15 +240,19 @@ class MainActivity : ComponentActivity() {
     Surface(color = Color.White, shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Tv, null); Spacer(Modifier.width(10.dp)); Text("Remote TV", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Icon(Icons.Outlined.Tv, null); Spacer(Modifier.width(10.dp)); Text(if (wifi) "TV lewat Wi-Fi" else "Remote infrared", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 Spacer(Modifier.weight(1f)); Icon(if (approved != null) Icons.Outlined.LockOpen else Icons.Outlined.Lock, null, tint = Muted)
             }
-            FilledIconButton(onClick = { approved?.let(vm::power) }, enabled = approved != null && vm.infrared.available && child.tvBrand != "none" && !vm.busy,
+            FilledIconButton(onClick = { approved?.let(vm::power) }, enabled = approved != null && connectionProblem == null && paired && !vm.busy,
                 modifier = Modifier.size(88.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Forest, disabledContainerColor = Soft)) {
-                Icon(Icons.Outlined.PowerSettingsNew, "Kirim power TV", Modifier.size(38.dp))
+                Icon(Icons.Outlined.PowerSettingsNew, if (wifi) "Nyalakan TV lewat Wi-Fi" else "Kirim power TV", Modifier.size(38.dp))
             }
-            Text(when { !vm.infrared.available -> "HP ini belum punya IR blaster"; child.tvBrand == "none" -> "Minta orang tua memilih profil TV"; approved != null -> "Arahkan infrared HP ke TV, lalu tekan power"; pending -> "Menunggu bacaan diperiksa"; else -> "Terbuka setelah bacaan disetujui" }, color = Muted, fontSize = 13.sp, textAlign = TextAlign.Center)
-            if (!vm.infrared.available) Text("Kamu tetap bisa ngaji dan mengirim rekaman. Kontrol TV perlu HP yang mendukung infrared.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+            Text(connectionProblem ?: when { !paired -> "Hubungkan TV di HP ini terlebih dahulu"; approved != null -> if (wifi) "HP dan TV harus di jaringan Wi-Fi yang sama. Tekan untuk mengirim permintaan nyalakan." else "Arahkan infrared HP ke TV, lalu tekan power"; pending -> "Menunggu bacaan diperiksa"; else -> "Terbuka setelah bacaan disetujui" }, color = Muted, fontSize = 13.sp, textAlign = TextAlign.Center)
+            if (wifi && child.tvPlatform != "wol") {
+                OutlinedButton(onClick = { vm.pairTv(child) }, enabled = !vm.busy && connectionProblem == null) { Text(if (paired) "Hubungkan ulang TV" else "Hubungkan TV") }
+                Text("Nyalakan TV saat pairing. Android/Google TV menampilkan kode; Samsung/LG meminta persetujuan di layar. Pairing tidak membuka izin power.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+            }
+            Text(if (wifi) "Menyalakan dari standby memerlukan dukungan jaringan TV. Jika tersedia, isi MAC untuk Wake-on-LAN. Pengiriman perintah belum menjamin TV menyala." else "Kontrol infrared perlu HP dengan IR blaster dan profil TV yang cocok.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
     Text("LANGKAH KECILMU", color = Muted, fontSize = 11.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
@@ -398,6 +417,10 @@ class MainActivity : ComponentActivity() {
     var seconds by remember(child.id) { mutableFloatStateOf(child.minSeconds.toFloat()) }
     var minutes by remember(child.id) { mutableFloatStateOf(child.unlockMinutes.toFloat()) }
     var brand by remember(child.id) { mutableStateOf(child.tvBrand) }
+    var transport by remember(child.id) { mutableStateOf(child.tvTransport) }
+    var platform by remember(child.id) { mutableStateOf(child.tvPlatform) }
+    var host by remember(child.id) { mutableStateOf(child.tvHost) }
+    var mac by remember(child.id) { mutableStateOf(child.tvMac) }
     var consent by remember(child.id) { mutableStateOf(child.aiConsent) }
     var revoke by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -434,12 +457,31 @@ class MainActivity : ComponentActivity() {
             Slider(value = minutes, onValueChange = { minutes = it }, valueRange = 1f..60f, steps = 58)
             Text("Izin untuk satu kali menekan power. Ini bukan timer otomatis mematikan TV.", color = Muted, fontSize = 12.sp)
         }
-        Text("Profil infrared TV", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text("Sambungkan TV lewat", fontWeight = FontWeight.Bold, fontSize = 18.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("none" to "Belum", "samsung" to "Samsung", "lg" to "LG").forEach { (id, label) -> Choice(label, brand == id, Modifier.weight(1f)) { brand = id } }
+            Choice("Infrared", transport == "infrared", Modifier.weight(1f)) { transport = "infrared" }
+            Choice("Wi-Fi yang sama", transport == "wifi", Modifier.weight(1f)) { transport = "wifi" }
         }
-        Text("Perlu HP dengan IR blaster 38 kHz. Profil umum ini belum tentu cocok untuk semua model. Tombol mengirim sinyal power toggle, jadi dapat menyalakan atau mematikan TV.", color = Muted, fontSize = 12.sp)
-        Button(onClick = { vm.policy(child, Policy(mode, surah, seconds.roundToInt(), minutes.roundToInt(), brand, consent)) }, enabled = !vm.busy && (mode != "ai" || consent && data.aiAvailable), modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("Simpan aturan") }
+        if (transport == "infrared") {
+            Text("Profil infrared TV", fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("none" to "Belum", "samsung" to "Samsung", "lg" to "LG").forEach { (id, label) -> Choice(label, brand == id, Modifier.weight(1f)) { brand = id } }
+            }
+            Text("Perlu HP dengan IR blaster 38 kHz. Profil umum ini belum tentu cocok untuk semua model. Sinyal power dapat menyalakan atau mematikan TV.", color = Muted, fontSize = 12.sp)
+        } else {
+            Text("Platform TV", fontWeight = FontWeight.Bold)
+            listOf("androidtv" to "Android TV / Google TV", "samsung" to "Samsung Tizen", "lg" to "LG webOS", "wol" to "Wake-on-LAN saja").forEach { (id, label) ->
+                Choice(label, platform == id, Modifier.fillMaxWidth()) { platform = id }
+            }
+            if (platform != "wol") {
+                Field("IP lokal TV · contoh 192.168.1.20", host, { host = it.trim().take(15) }, KeyboardType.Decimal)
+                Text("Cari IP di pengaturan jaringan TV. HP anak harus satu subnet Wi-Fi. Setelah aturan disimpan, hubungkan TV dari halaman anak pada HP yang akan menjadi remote.", color = Muted, fontSize = 12.sp)
+            }
+            Field(if (platform == "wol") "MAC Wi-Fi TV · wajib" else "MAC Wi-Fi TV · opsional untuk standby", mac, { mac = it.trim().uppercase().take(17) })
+            Text("Bangun dari standby perlu Wake-on-LAN / wake melalui Wi-Fi yang didukung dan diaktifkan di TV. Jaringan tamu atau isolasi perangkat dapat memblokir koneksi. Tidak semua model mendukung fitur yang sama.", color = Muted, fontSize = 12.sp)
+        }
+        val validConnection = transport != "wifi" || (if (platform == "wol") runCatching { WakePacket.macBytes(mac) }.isSuccess else runCatching { LanAddress.parse(host) }.isSuccess && (mac.isBlank() || runCatching { WakePacket.macBytes(mac) }.isSuccess))
+        Button(onClick = { vm.policy(child, Policy(mode, surah, seconds.roundToInt(), minutes.roundToInt(), brand, consent, transport, mac, platform, host)) }, enabled = !vm.busy && validConnection && (mode != "ai" || consent && data.aiAvailable), modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("Simpan aturan") }
         Text("Menyimpan aturan membatalkan izin lama agar tugas baru tidak terlewati.", color = Muted, fontSize = 12.sp)
         OutlinedButton(onClick = { revoke = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Putuskan semua HP anak") }
     }
@@ -450,8 +492,8 @@ class MainActivity : ComponentActivity() {
     Text("Ngaji jadi kebiasaan", fontSize = 28.sp, fontWeight = FontWeight.Bold)
     EmptyCard("01 · Baca dan rekam", "Baca semua ayat dengan tenang. Mikrofon hanya aktif saat kamu menekan mulai merekam.")
     EmptyCard("02 · Tunggu diperiksa", "Orang tua mendengar rekamanmu. Jika memakai AI, bacaan yang meragukan tetap diperiksa orang tua.")
-    EmptyCard("03 · Arahkan, lalu power", "Setelah disetujui, arahkan IR blaster HP ke TV. Satu bacaan membuka satu kali tombol power.")
-    Text(if (vm.infrared.available) "Infrared tersedia di HP ini. Minta orang tua memilih profil TV di pengaturan keluarga." else "HP ini tidak memiliki IR blaster. Ngaji dan pemeriksaan tetap bisa dipakai; kontrol TV perlu perangkat yang sesuai.", color = Muted)
+    EmptyCard("03 · Arahkan, lalu power", "Setelah disetujui, gunakan infrared atau kirim permintaan nyalakan melalui Wi-Fi sesuai pengaturan orang tua. Satu bacaan membuka satu kali tombol.")
+    Text(if (vm.infrared.available) "Infrared tersedia di HP ini. Minta orang tua memilih profil TV di pengaturan keluarga." else "HP ini tidak memiliki IR blaster. Gunakan mode Wi-Fi untuk TV yang mendukung remote jaringan atau bangun dari standby.", color = Muted)
     Text("Aplikasi mengatur remote di JagaBocil. Tombol fisik TV dan remote lain tetap bisa digunakan.", color = Muted, fontSize = 13.sp)
 }
 

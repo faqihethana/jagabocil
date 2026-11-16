@@ -11,14 +11,20 @@ Ini MVP yang bisa dijalankan sendiri: aplikasi Android + API Node.js 24/Fastify 
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
 - **AI opsional:** Gemini menerima audio setelah persetujuan orang tua. Hanya bacaan yang dikenali lengkap dengan confidence dan coverage ≥95% yang disetujui otomatis. Kegagalan, hasil tidak valid, dan keraguan diteruskan ke antrean manual.
 - Izin server berlaku 1–60 menit setelah disetujui dan dikonsumsi atomik sekali saja. Mengganti aturan, mencabut perangkat, atau menghapus rekaman membatalkan izin yang belum dipakai.
-- Kontrol nyata melalui Android `ConsumerIrManager`, dengan profil power Samsung/LG 38 kHz. Pemeriksaan dukungan hardware dilakukan sebelum meminta izin power.
+- Dua metode koneksi: **infrared** Samsung/LG 38 kHz atau **Wi-Fi lokal**. Pilihan platform Wi-Fi: Android TV/Google TV (Remote Service v2), Samsung Tizen (WSS), LG webOS (SSAP/WSS), dan Wake-on-LAN. Driver jaringan masih perlu pengujian pada TV fisik; lihat [matriks kompatibilitas](docs/tv-compatibility.md).
 - Riwayat, pemutaran audio privat, penghapusan oleh orang tua, pencabutan perangkat anak, serta pembaruan antrean setiap 10 detik.
 
 ## Batas kontrol TV
 
 Aplikasi mengunci **tombol power di JagaBocil**. Tombol fisik TV, remote lain, atau aplikasi remote lain tetap dapat digunakan. Penguncian menyeluruh memerlukan integrasi yang sesuai dengan perangkat TV atau pengendali daya khusus.
 
-MVP memakai **HP dengan IR blaster**, bukan Android TV melalui Wi-Fi. Profil Samsung/LG merupakan kode umum; kecocokan perlu diuji pada model TV yang dipakai. Power bersifat toggle: sinyal yang sama dapat menyalakan maupun mematikan. Aplikasi tidak mengetahui kondisi TV dan tidak otomatis mematikannya setelah durasi tertentu. Izin yang sudah dikonsumsi tidak dipulihkan saat sinyal gagal mencapai TV.
+**Infrared:** perlu HP dengan IR blaster. Profil Samsung/LG merupakan kode umum dan harus diuji pada model TV yang dipakai. Power IR bersifat toggle: dapat menyalakan maupun mematikan TV.
+
+**Wi-Fi:** orang tua memilih platform dan mengisi IP lokal TV; pairing dilakukan di HP anak yang menjadi remote. Android/Google TV memakai kode di layar, Samsung/LG memakai persetujuan registrasi TV. HP harus terhubung ke Wi-Fi pada subnet IPv4 privat yang sama dengan TV. Tidak membutuhkan IR blaster atau jembatan server lokal tambahan. Mode Wake-on-LAN cukup menggunakan MAC jaringan TV.
+
+Menyalakan dari standby bergantung pada kemampuan dan pengaturan model TV. Isi MAC opsional untuk mencoba Wake-on-LAN ketika layanan remote TV yang sudah dipairing tidak dapat dihubungi. Tidak ada jaminan semua model/firmware dapat dibangunkan. LG SSAP `turnOnScreen` menyalakan layar saat layanan TV masih aktif; membangunkan TV dari standby penuh perlu wake jaringan yang didukung. Wi-Fi mengirim permintaan nyalakan; tidak otomatis mematikan TV setelah durasi tertentu. Izin yang sudah dikonsumsi tidak dipulihkan jika pengiriman selanjutnya gagal atau TV tidak merespons.
+
+Detail port, pairing, batas kompatibilitas, dan langkah uji perangkat ada di [panduan TV](docs/tv-compatibility.md).
 
 AI membantu mengenali isi bacaan, belum menjamin tajwid, identitas pembaca, atau membedakan bacaan langsung dengan pemutaran rekaman. Untuk pengawasan ketat, gunakan pemeriksaan orang tua.
 
@@ -61,9 +67,9 @@ APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 
 3. Pilih **Orang tua → Daftar**, buat profil anak di tab **Keluarga**, dan simpan aturan serta profil TV.
 4. Buat kode pairing. Di HP anak pilih **Aku anak**, gunakan server yang sama, masukkan kode.
 5. Anak merekam surah sesuai tugas. Orang tua memutar salinannya di antrean, lalu memilih **Setujui** atau **Ulangi**. Mode AI dapat diaktifkan pada aturan anak jika server sudah dikonfigurasi dan orang tua menyetujui pengiriman audio.
-6. Setelah disetujui, arahkan IR blaster HP anak ke TV dan tekan power. Tanpa IR, alur ngaji dan pemeriksaan tetap dapat dipakai; power tidak tersedia.
+6. Untuk infrared, arahkan IR blaster HP anak ke TV. Untuk Wi-Fi, pilih platform/IP/MAC pada aturan anak, lalu gunakan **Hubungkan TV** di HP anak saat TV menyala (kecuali mode Wake-on-LAN yang tidak memakai pairing). Setelah bacaan disetujui, tombol mengirim satu permintaan power melalui metode yang dipilih.
 
-HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Pemulihan kata sandi, notifikasi push, kontrol TV Wi-Fi, dan distribusi Play Store belum tersedia.
+HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Pemulihan kata sandi, notifikasi push, penemuan TV otomatis, dan distribusi Play Store belum tersedia.
 
 ## Privasi dan akses
 
@@ -85,7 +91,7 @@ cd android
 ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-Tes integrasi API memakai WAV sungguhan untuk memeriksa ffprobe, hak akses keluarga, pairing, persetujuan manual, izin sekali pakai/race, kedaluwarsa, pencabutan, penghapusan, dan fallback AI. Provider AI di-mock pada tes agar tidak mengirim audio atau memakai kuota. Unit test Android memeriksa status izin dan struktur kode IR. GitHub Actions membangun API dan APK debug yang dapat diunduh dari artifact workflow.
+Tes integrasi API memakai WAV sungguhan untuk memeriksa ffprobe, hak akses keluarga, pairing, persetujuan manual, izin sekali pakai/race, kedaluwarsa, pencabutan, penghapusan, dan fallback AI. Provider AI di-mock pada tes agar tidak mengirim audio atau memakai kuota. Unit test Android memeriksa status izin, kode IR, paket Wake-on-LAN, subnet Wi-Fi, framing Remote v2, kode pairing, payload Samsung/LG, dan penolakan sertifikat TV yang berbeda. Tes tidak menggantikan pengujian pada TV fisik. Migrasi database menambahkan konfigurasi Wi-Fi tanpa mengubah keluarga atau pengaturan infrared lama. GitHub Actions membangun API dan APK debug yang dapat diunduh dari artifact workflow.
 
 ## Struktur
 

@@ -14,8 +14,13 @@ import { passes, verdictSchema, type Verify } from './ai.js';
 const run = promisify(execFile);
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const day = 86_400_000;
+function isPrivateIpv4(host: string) {
+  if (!/^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$/.test(host)) return false;
+  const [a, b, c, d] = host.split('.').map(Number);
+  return [a,b,c,d].every(x => x !== undefined && x <= 255) && (a === 10 || a === 192 && b === 168 || a === 172 && b! >= 16 && b! <= 31);
+}
 type Actor = { role: 'parent' | 'child'; id: string };
-type Child = { id: string; parent_id: string; name: string; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
+type Child = { id: string; parent_id: string; name: string; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
 type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
 type Options = { dataDir: string; verify?: Verify; logger?: boolean; now?: () => number };
 class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }
@@ -49,6 +54,16 @@ export async function createApp(options: Options) {
     CREATE INDEX IF NOT EXISTS recitations_child_date ON recitations(child_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS tokens_subject ON tokens(subject_id);
     CREATE UNIQUE INDEX IF NOT EXISTS children_pair ON children(pair_hash) WHERE pair_hash IS NOT NULL;`);
+  // Additive migration preserves existing families and keeps their IR configuration.
+  const columns = new Set((db.prepare('PRAGMA table_info(children)').all() as { name: string }[]).map(c => c.name));
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!columns.has('tv_transport')) db.exec("ALTER TABLE children ADD COLUMN tv_transport TEXT NOT NULL DEFAULT 'infrared'");
+    if (!columns.has('tv_mac')) db.exec("ALTER TABLE children ADD COLUMN tv_mac TEXT NOT NULL DEFAULT ''");
+    if (!columns.has('tv_platform')) db.exec("ALTER TABLE children ADD COLUMN tv_platform TEXT NOT NULL DEFAULT 'wol'");
+    if (!columns.has('tv_host')) db.exec("ALTER TABLE children ADD COLUMN tv_host TEXT NOT NULL DEFAULT ''");
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }
   const one = <T>(sql: string, ...args: SQLInputValue[]) => db.prepare(sql).get(...args) as T | undefined;
   const all = <T>(sql: string, ...args: SQLInputValue[]) => db.prepare(sql).all(...args) as T[];
   const change = (sql: string, ...args: SQLInputValue[]) => db.prepare(sql).run(...args);
@@ -86,7 +101,7 @@ export async function createApp(options: Options) {
     return rec;
   }
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
-  const publicChild = (c: Child) => ({ id: c.id, name: c.name, mode: c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, aiConsent: c.ai_consent === 1 });
+  const publicChild = (c: Child) => ({ id: c.id, name: c.name, mode: c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, aiConsent: c.ai_consent === 1 });
   const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer });
   function pairing(id: string) {
     let code: string;
@@ -155,9 +170,11 @@ export async function createApp(options: Options) {
   });
   app.put('/children/:id/policy', async req => {
     const a = await actor(req, 'parent'); const c = childFor(a, paramId(req));
-    const p = z.object({ mode: z.enum(['manual', 'ai']), surahId: z.enum(['112', '113', '114']), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), tvBrand: z.enum(['none', 'samsung', 'lg']), aiConsent: z.boolean() }).parse(req.body);
+    const p = z.object({ mode: z.enum(['manual', 'ai']), surahId: z.enum(['112', '113', '114']), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), tvBrand: z.enum(['none', 'samsung', 'lg']), aiConsent: z.boolean(), tvPlatform: z.enum(['wol', 'androidtv', 'samsung', 'lg']).default('wol'), tvHost: z.string().trim().max(15).default(''), tvTransport: z.enum(['infrared', 'wifi']).default('infrared'), tvMac: z.string().trim().toUpperCase().regex(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$|^$/).default('') }).parse(req.body);
+    if ((p.tvTransport === 'wifi' && p.tvPlatform === 'wol' || p.tvMac) && (!p.tvMac || p.tvMac === '00:00:00:00:00:00' || (parseInt(p.tvMac.slice(0, 2), 16) & 1) !== 0)) return fail(400, 'Masukkan MAC Wi-Fi TV yang valid dan bukan alamat multicast.');
+    if (p.tvTransport === 'wifi' && p.tvPlatform !== 'wol' && !isPrivateIpv4(p.tvHost)) return fail(400, 'Masukkan alamat IPv4 lokal TV yang valid.');
     if (p.mode === 'ai' && (!p.aiConsent || !options.verify)) return fail(400, 'AI perlu persetujuan orang tua dan konfigurasi server.');
-    change('UPDATE children SET mode=?,surah_id=?,min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,revision=revision+1 WHERE id=?', p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, Number(p.aiConsent), c.id);
+    change('UPDATE children SET mode=?,surah_id=?,min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,revision=revision+1 WHERE id=?', p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, Number(p.aiConsent), p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, c.id);
     // A changed assignment requires a fresh recording; never reuse an old approval.
     change("UPDATE recitations SET status='rejected',feedback='Aturan diperbarui. Yuk, rekam ngaji lagi.' WHERE child_id=? AND used_at IS NULL", c.id);
     return { child: publicChild(childFor(a, c.id)) };
@@ -231,12 +248,14 @@ export async function createApp(options: Options) {
   });
   app.post('/tv/authorize', async req => {
     const a = await actor(req, 'child');
-    const { recitationId } = z.object({ recitationId: z.string().uuid() }).parse(req.body);
+    const { recitationId, tvTransport } = z.object({ recitationId: z.string().uuid(), tvTransport: z.enum(['infrared', 'wifi']).default('infrared') }).parse(req.body);
     const r = recFor(a, recitationId); const c = childFor(a, a.id);
-    if (c.tv_brand === 'none') return fail(400, 'Minta orang tua memilih profil TV dulu.');
+    if (tvTransport !== c.tv_transport) return fail(409, 'Metode koneksi TV berubah. Muat ulang aplikasi dan pengaturan.');
+    if (c.tv_transport === 'infrared' && c.tv_brand === 'none') return fail(400, 'Minta orang tua memilih profil TV dulu.');
+    if (c.tv_transport === 'wifi' && (c.tv_platform === 'wol' ? !c.tv_mac : !isPrivateIpv4(c.tv_host))) return fail(400, 'Minta orang tua melengkapi pengaturan Wi-Fi TV dulu.');
     const used = change("UPDATE recitations SET used_at=? WHERE id=? AND child_id=? AND status='approved' AND used_at IS NULL AND expires_at>? AND created_at>?", now(), r.id, c.id, now(), now() - 7 * day);
     if (!used.changes) return fail(403, 'Ngaji perlu disetujui dulu. Izin hanya berlaku sekali dan bisa kedaluwarsa.');
-    return { authorized: true, tvBrand: c.tv_brand, expiresAt: now() + 10_000 };
+    return { authorized: true, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, expiresAt: now() + 10_000 };
   });
   return app;
 }
