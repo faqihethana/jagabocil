@@ -4,30 +4,17 @@ import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.js';
+import { postgresDatabase } from '../src/database.js';
+import { randomUUID } from 'node:crypto';
 import type { Verify } from '../src/ai.js';
 
-// Real PCM WAV fixtures exercise ffprobe rather than trusting client duration.
-function wav(seconds: number) {
-  const rate = 8000; const samples = rate * seconds;
-  const b = Buffer.alloc(44 + samples * 2);
-  b.write('RIFF'); b.writeUInt32LE(b.length - 8, 4); b.write('WAVEfmt ', 8);
-  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
-  b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
-  b.write('data', 36); b.writeUInt32LE(samples * 2, 40);
-  for (let i = 0; i < samples; i++) b.writeInt16LE(Math.round(Math.sin(i * .2) * 5000), 44 + i * 2);
-  return b;
-}
-function multipart(audio: Buffer, surahId = '112') {
-  const boundary = 'jagabocil-test-boundary';
-  return { headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, payload: Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="surahId"\r\n\r\n${surahId}\r\n--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="ngaji.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
-    audio, Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]) };
-}
+import { wav, multipart } from './fixtures.js';
 const root = await mkdtemp(join(tmpdir(), 'jagabocil-test-'));
 let now = Date.now();
 let verifier: Verify = async () => { throw Error('provider unavailable'); };
-const app = await createApp({ dataDir: root, now: () => now, verify: (...args) => verifier(...args) });
+const schema = 'jagabocil_test_' + randomUUID().replaceAll('-', '');
+const database = process.env.TEST_DATABASE_URL ? await postgresDatabase(process.env.TEST_DATABASE_URL, schema, true) : undefined;
+const app = await createApp({ dataDir: root, database, now: () => now, verify: (...args) => verifier(...args) });
 const request = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, token = '', payload?: unknown) => app.inject({ method, url, headers: token ? { authorization: `Bearer ${token}` } : {}, payload });
 let parent: string, outsider: string, child: string, childId: string, recId: string;
 const policy = { mode: 'manual', surahId: '112', minSeconds: 10, unlockMinutes: 15, tvBrand: 'lg', aiConsent: false };
@@ -45,7 +32,7 @@ before(async () => {
   assert.equal((await request('POST', '/pair', '', { code: created.pairing.code })).statusCode, 400);
   await request('PUT', `/children/${childId}/policy`, parent, policy);
 });
-after(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+after(async () => { if (database) await database.change(`DROP SCHEMA \"${schema}\" CASCADE`); await app.close(); await rm(root, { recursive: true, force: true }); });
 
 test('password authentication rejects wrong credentials and normalizes email', async () => {
   assert.equal((await request('POST', '/auth/login', '', { email: 'parent@example.com', password: 'password-salah' })).statusCode, 401);

@@ -2,7 +2,7 @@
 
 Aplikasi Android untuk membangun kebiasaan **ngaji sebelum memakai tombol power TV**. Anak merekam bacaan, AI atau orang tua memeriksanya, lalu server memberikan izin satu kali power. Antarmuka berbahasa Indonesia, dibuat dengan Kotlin dan Jetpack Compose.
 
-Ini MVP yang bisa dijalankan sendiri: aplikasi Android + API Node.js 24/Fastify + SQLite + penyimpanan audio privat. Tidak membutuhkan layanan database atau akun AI untuk mode manual.
+Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S3 privat** untuk penyimpanan cloud. Mode SQLite + filesystem lokal tetap tersedia untuk pengembangan dan instalasi lama. AI bersifat opsional.
 
 ## Yang sudah tersedia
 
@@ -39,7 +39,7 @@ cp .env.example .env
 npm run dev
 ```
 
-API tersedia di `http://localhost:8787`; `GET /health` memeriksa koneksi tanpa login. Data tersimpan di `server/data/`. Untuk mode AI, isi `GEMINI_API_KEY` pada `.env`, lalu restart. `AI_MODEL` dapat diganti dengan model Gemini yang mendukung audio dan structured output pada Interactions API; default `gemini-4-hydrogen` mengikuti dokumentasi audio Google saat implementasi. Interaksi dikirim dengan `store: false`. Jika provider/model tidak tersedia, rekaman tetap masuk antrean orang tua. Key tidak pernah dimasukkan ke APK.
+API tersedia di `http://localhost:8787`; `GET /health` memeriksa API serta menampilkan jenis database/audio store tanpa login. `.env.local` yang gitignored dapat menimpa konfigurasi `.env`. Tanpa `DATABASE_URL`, data lokal tersimpan di `server/data/`; dengan URL, API memakai schema `jagabocil` di PostgreSQL. Lihat [setup Neon dan S3](docs/backend-storage.md). Untuk mode AI, isi `GEMINI_API_KEY` pada `.env`, lalu restart. `AI_MODEL` dapat diganti dengan model Gemini yang mendukung audio dan structured output pada Interactions API; default `gemini-4-hydrogen` mengikuti dokumentasi audio Google saat implementasi. Interaksi dikirim dengan `store: false`. Jika provider/model tidak tersedia, rekaman tetap masuk antrean orang tua. Key tidak pernah dimasukkan ke APK.
 
 Alternatif Docker dari root repo:
 
@@ -47,7 +47,7 @@ Alternatif Docker dari root repo:
 docker compose up --build -d
 ```
 
-Compose menyimpan data dalam volume `family-data` dan membuka port hanya pada loopback. Pasang reverse proxy HTTPS untuk pemakaian dari dua HP. Ini server dengan disk persisten dan satu instance; jangan deploy SQLite/audio lokal ke filesystem serverless sementara. Gunakan backup volume dan TLS pada host yang dipilih. Deployment hosting belum disertakan.
+Compose membuka port hanya pada loopback. Pasang reverse proxy HTTPS untuk pemakaian dari dua HP. Untuk cloud, isi `DATABASE_URL`, jalankan migrasi dengan URL direct, dan set `AUDIO_STORE=s3` beserta konfigurasi AWS. SQLite/audio lokal menggunakan volume `family-data` dan membutuhkan satu instance dengan disk persisten. Pada Neon/S3, disk lokal dipakai sementara oleh ffprobe; data utama tersimpan di layanan cloud. Backup, HTTPS, dan deployment hosting tetap perlu disiapkan.
 
 Untuk AI pada Docker, ekspor `GEMINI_API_KEY` di shell atau isi `.env` di **root repo** sebelum menjalankan Compose. File `server/.env` dipakai oleh perintah npm.
 
@@ -73,9 +73,9 @@ HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release me
 
 ## Privasi dan akses
 
-Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di server, berlaku 30 hari, dan dienkripsi dengan Android Keystore di HP. API audio memerlukan autentikasi dan pemeriksaan kepemilikan keluarga; folder audio tidak dipublikasikan. Upload dibatasi 10 MB, 180 detik, serta format M4A/WAV; durasi diperiksa dari berkas oleh ffprobe, bukan dari klaim HP.
+Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di server, berlaku 30 hari, dan dienkripsi dengan Android Keystore di HP. API audio memerlukan autentikasi dan pemeriksaan kepemilikan keluarga. S3 hanya menggunakan prefix `jagabocil/`, enkripsi SSE-S3, dan respons audio melalui API keluarga; tidak ada URL publik rekaman. Saat startup mode S3, server memakai probe tanpa data anak pada prefix rekaman untuk memeriksa penolakan akses anonim sebelum menerima upload. Upload dibatasi 10 MB, 180 detik, serta format M4A/WAV; durasi diperiksa dari berkas oleh ffprobe, bukan dari klaim HP.
 
-Audio dan riwayat otomatis dihapus setelah 7 hari, melalui cleanup saat startup dan setiap jam. Orang tua dapat menghapus lebih awal di riwayat. Cache audio HP dibersihkan setelah dipakai, logout, atau startup berikutnya; rekaman terputus saat aplikasi masuk background dibatalkan. Backup host, disk encryption, dan kebijakan penyedia AI mengikuti konfigurasi operator server. Jangan mengaktifkan AI tanpa memahami pemrosesan audio anak oleh penyedia.
+Audio dan riwayat otomatis dihapus setelah 7 hari, melalui cleanup saat startup dan setiap jam. Jika penghapusan S3 gagal, metadata dipertahankan agar cleanup dapat mencoba ulang; rekaman yang sedang dihapus langsung diblokir dari playback dan izin power. Orang tua dapat menghapus lebih awal di riwayat. Cache audio HP dibersihkan setelah dipakai, logout, atau startup berikutnya; rekaman terputus saat aplikasi masuk background dibatalkan. Backup host, disk encryption, dan kebijakan penyedia AI mengikuti konfigurasi operator server. Jangan mengaktifkan AI tanpa memahami pemrosesan audio anak oleh penyedia.
 
 ## Verifikasi
 
@@ -91,7 +91,7 @@ cd android
 ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-Tes integrasi API memakai WAV sungguhan untuk memeriksa ffprobe, hak akses keluarga, pairing, persetujuan manual, izin sekali pakai/race, kedaluwarsa, pencabutan, penghapusan, dan fallback AI. Provider AI di-mock pada tes agar tidak mengirim audio atau memakai kuota. Unit test Android memeriksa status izin, kode IR, paket Wake-on-LAN, subnet Wi-Fi, framing Remote v2, kode pairing, payload Samsung/LG, dan penolakan sertifikat TV yang berbeda. Tes tidak menggantikan pengujian pada TV fisik. Migrasi database menambahkan konfigurasi Wi-Fi tanpa mengubah keluarga atau pengaturan infrared lama. GitHub Actions membangun API dan APK debug yang dapat diunduh dari artifact workflow.
+CI menjalankan suite pada SQLite dan PostgreSQL. Tes S3 memakai layanan HTTP tiruan dengan AWS SDK, tanpa key AWS sungguhan. Tes integrasi API memakai WAV sungguhan untuk memeriksa ffprobe, hak akses keluarga, pairing, persetujuan manual, izin sekali pakai/race, kedaluwarsa, pencabutan, penghapusan, dan fallback AI. Provider AI di-mock pada tes agar tidak mengirim audio atau memakai kuota. Unit test Android memeriksa status izin, kode IR, paket Wake-on-LAN, subnet Wi-Fi, framing Remote v2, kode pairing, payload Samsung/LG, dan penolakan sertifikat TV yang berbeda. Tes tidak menggantikan pengujian pada TV fisik. Migrasi database menambahkan konfigurasi Wi-Fi tanpa mengubah keluarga atau pengaturan infrared lama. GitHub Actions membangun API dan APK debug yang dapat diunduh dari artifact workflow.
 
 ## Struktur
 

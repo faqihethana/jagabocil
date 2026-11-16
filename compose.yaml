@@ -6,6 +6,16 @@ services:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-gemini-4-hydrogen}
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-jagabocil}
+      DATABASE_AUTO_MIGRATE: ${DATABASE_AUTO_MIGRATE:-false}
+      AUDIO_STORE: ${AUDIO_STORE:-local}
+      AWS_REGION: ${AWS_REGION:-ap-southeast-3}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-faqih-ethana-general-bucket}
+      AWS_S3_PREFIX: ${AWS_S3_PREFIX:-jagabocil/production}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     volumes:
       - family-data:/app/data
     restart: unless-stopped
