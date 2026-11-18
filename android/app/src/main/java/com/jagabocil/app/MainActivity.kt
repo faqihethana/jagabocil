@@ -41,6 +41,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -438,6 +439,7 @@ class MainActivity : ComponentActivity() {
     var mac by remember(child.id) { mutableStateOf(child.tvMac) }
     var consent by remember(child.id) { mutableStateOf(child.aiConsent) }
     var revoke by remember { mutableStateOf(false) }
+    var showDiscovery by remember(child.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { vm.screen = "family" }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
@@ -485,6 +487,11 @@ class MainActivity : ComponentActivity() {
             Text("Perlu HP dengan IR blaster 38 kHz. Profil umum ini belum tentu cocok untuk semua model. Sinyal power dapat menyalakan atau mematikan TV.", color = Muted, fontSize = 12.sp)
         } else {
             Text("Platform TV", fontWeight = FontWeight.Bold)
+            OutlinedButton(onClick = { showDiscovery = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Outlined.Search, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Cari TV di Wi-Fi")
+            }
             listOf("androidtv" to "Android TV / Google TV", "samsung" to "Samsung Tizen", "lg" to "LG webOS", "wol" to "Wake-on-LAN saja").forEach { (id, label) ->
                 Choice(label, platform == id, Modifier.fillMaxWidth()) { platform = id }
             }
@@ -500,7 +507,70 @@ class MainActivity : ComponentActivity() {
         Text("Menyimpan aturan membatalkan izin lama agar tugas baru tidak terlewati.", color = Muted, fontSize = 12.sp)
         OutlinedButton(onClick = { revoke = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Putuskan semua HP anak") }
     }
+    if (showDiscovery) TvDiscoveryDialog(
+        vm,
+        onDismiss = { showDiscovery = false },
+        onSelect = { tv ->
+            if (host != tv.host || platform != tv.platform.id) mac = ""
+            host = tv.host
+            platform = tv.platform.id
+            showDiscovery = false
+        },
+    )
     if (revoke) AlertDialog(onDismissRequest = { revoke = false }, title = { Text("Putuskan perangkat anak?") }, text = { Text("Semua HP ${child.name} perlu dihubungkan ulang. Izin power yang belum dipakai ikut dicabut.") }, confirmButton = { TextButton(onClick = { revoke = false; vm.revoke(child.id) }) { Text("Putuskan") } }, dismissButton = { TextButton(onClick = { revoke = false }) { Text("Batal") } })
+}
+
+@Composable private fun TvDiscoveryDialog(vm: AppViewModel, onDismiss: () -> Unit, onSelect: (DiscoveredTv) -> Unit) {
+    var result by remember { mutableStateOf<Result<List<DiscoveredTv>>?>(null) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) onDismiss()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(Unit) {
+        result = try {
+            Result.success(vm.discoverTvs())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cari TV di Wi-Fi") },
+        text = {
+            val outcome = result
+            val tvs = outcome?.getOrNull().orEmpty()
+            when {
+                outcome == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
+                    Text("Mencari TV yang menyala di jaringan ini…")
+                }
+                tvs.isEmpty() -> Text(
+                    if (outcome.exceptionOrNull() is IllegalStateException) {
+                        "Hubungkan HP ke Wi-Fi rumah dengan IPv4 lokal atau isi IP TV secara manual."
+                    } else {
+                        "Belum ada TV yang ditemukan. Pastikan TV menyala di Wi-Fi yang sama, atau isi IP TV secara manual."
+                    }
+                )
+                else -> Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    tvs.forEach { tv ->
+                        OutlinedButton(onClick = { onSelect(tv) }, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                Text(tv.name, fontWeight = FontWeight.SemiBold)
+                                Text(if (tv.name == tv.platform.label) tv.host else "${tv.platform.label} · ${tv.host}", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (result == null) "Batal" else "Tutup") } },
+    )
 }
 
 @Composable private fun Guide(vm: AppViewModel) {

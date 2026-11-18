@@ -15,31 +15,41 @@ import kotlinx.coroutines.withContext
 /** Wake-on-LAN over the phone's Wi-Fi interface. No claim of TV discovery or delivery acknowledgement. */
 class WifiTv(context: Context) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
+    internal data class Link(val network: Network, val address: Inet4Address, val prefixLength: Int)
     data class Target(val network: Network, val local: InetAddress, val broadcast: InetAddress, val mac: String)
+
+    private fun links(): Sequence<Link> = connectivity.allNetworks.asSequence().flatMap { network ->
+        val caps = connectivity.getNetworkCapabilities(network)
+        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+            emptySequence()
+        } else {
+            connectivity.getLinkProperties(network)?.linkAddresses.orEmpty().asSequence().mapNotNull { link ->
+                (link.address as? Inet4Address)?.let { Link(network, it, link.prefixLength) }
+            }
+        }
+    }
+
     fun endpoint(host: String): Pair<Network, InetAddress> {
         val bytes = LanAddress.parse(host)
-        for (network in connectivity.allNetworks) {
-            val caps = connectivity.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
-            for (link in connectivity.getLinkProperties(network)?.linkAddresses.orEmpty()) {
-                if (link.address is Inet4Address && LanAddress.sameSubnet(link.address.address, bytes, link.prefixLength)) return network to InetAddress.getByAddress(bytes)
-            }
-        }
+        val link = links().firstOrNull { LanAddress.sameSubnet(it.address.address, bytes, it.prefixLength) }
+        if (link != null) return link.network to InetAddress.getByAddress(bytes)
         error("Alamat TV belum berada di subnet Wi-Fi HP ini. Hubungkan ke jaringan rumah yang sama dan periksa IP TV.")
     }
+
+    internal fun discoveryLink(): Link {
+        val active = connectivity.activeNetwork
+        val homeLinks = links().filter {
+            runCatching { WakePacket.broadcast(it.address.address, it.prefixLength) }.isSuccess
+        }.toList()
+        return homeLinks.firstOrNull { it.network == active } ?: homeLinks.firstOrNull()
+            ?: error("Hubungkan HP ke Wi-Fi rumah yang sama dengan TV. Pencarian membutuhkan IPv4 lokal.")
+    }
+
     fun prepare(mac: String): Target {
         WakePacket.macBytes(mac)
-        val networks = connectivity.allNetworks.filter { network ->
-            val caps = connectivity.getNetworkCapabilities(network)
-            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        }
-        for (network in networks) {
-            val addresses = connectivity.getLinkProperties(network)?.linkAddresses.orEmpty()
-            for (link in addresses) {
-                if (link.address !is Inet4Address) continue
-                val broadcast = runCatching { WakePacket.broadcast(link.address.address, link.prefixLength) }.getOrNull() ?: continue
-                return Target(network, link.address, InetAddress.getByAddress(broadcast), mac)
-            }
+        for (link in links()) {
+            val broadcast = runCatching { WakePacket.broadcast(link.address.address, link.prefixLength) }.getOrNull() ?: continue
+            return Target(link.network, link.address, InetAddress.getByAddress(broadcast), mac)
         }
         error("Hubungkan HP ke Wi-Fi rumah yang sama dengan TV. Jaringan harus mendukung IPv4 lokal dan broadcast.")
     }

@@ -20,7 +20,7 @@ Aplikasi mengunci **tombol power di JagaBocil**. Tombol fisik TV, remote lain, a
 
 **Infrared:** perlu HP dengan IR blaster. Profil Samsung/LG merupakan kode umum dan harus diuji pada model TV yang dipakai. Power IR bersifat toggle: dapat menyalakan maupun mematikan TV.
 
-**Wi-Fi:** orang tua memilih platform dan mengisi IP lokal TV; pairing dilakukan di HP anak yang menjadi remote. Android/Google TV memakai kode di layar, Samsung/LG memakai persetujuan registrasi TV. HP harus terhubung ke Wi-Fi pada subnet IPv4 privat yang sama dengan TV. Tidak membutuhkan IR blaster atau jembatan server lokal tambahan. Mode Wake-on-LAN cukup menggunakan MAC jaringan TV.
+**Wi-Fi:** orang tua bisa memilih TV dari **Cari TV di Wi-Fi** atau mengisi platform dan IP lokal secara manual. Pairing dilakukan di HP anak yang menjadi remote. Android/Google TV memakai kode di layar, Samsung/LG memakai persetujuan registrasi TV. HP harus terhubung ke Wi-Fi pada subnet IPv4 privat yang sama dengan TV. Tidak membutuhkan IR blaster atau jembatan server lokal tambahan. Mode Wake-on-LAN menggunakan MAC jaringan TV.
 
 Menyalakan dari standby bergantung pada kemampuan dan pengaturan model TV. Isi MAC opsional untuk mencoba Wake-on-LAN ketika layanan remote TV yang sudah dipairing tidak dapat dihubungi. Tidak ada jaminan semua model/firmware dapat dibangunkan. LG SSAP `turnOnScreen` menyalakan layar saat layanan TV masih aktif; membangunkan TV dari standby penuh perlu wake jaringan yang didukung. Wi-Fi mengirim permintaan nyalakan; tidak otomatis mematikan TV setelah durasi tertentu. Izin yang sudah dikonsumsi tidak dipulihkan jika pengiriman selanjutnya gagal atau TV tidak merespons.
 
@@ -73,7 +73,7 @@ APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 
 5. Anak merekam surah sesuai tugas. Orang tua memutar salinannya di antrean, lalu memilih **Setujui** atau **Ulangi**. Mode AI dapat diaktifkan pada aturan anak jika server sudah dikonfigurasi dan orang tua menyetujui pengiriman audio.
 6. Untuk infrared, arahkan IR blaster HP anak ke TV. Untuk Wi-Fi, pilih platform/IP/MAC pada aturan anak, lalu gunakan **Hubungkan TV** di HP anak saat TV menyala (kecuali mode Wake-on-LAN yang tidak memakai pairing). Setelah bacaan disetujui, tombol mengirim satu permintaan power melalui metode yang dipilih.
 
-HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Pemulihan kata sandi, notifikasi push, penemuan TV otomatis, dan distribusi Play Store belum tersedia.
+HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Pemulihan kata sandi, notifikasi push, dan distribusi Play Store belum tersedia.
 
 Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka pakai ke kolom Username. Nama tampilan dan kata sandi akun lama tetap bisa digunakan.
 

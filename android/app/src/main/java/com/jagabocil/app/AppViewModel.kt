@@ -26,6 +26,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val infrared = Infrared(application)
     val wifiTv = WifiTv(application)
     val tvRemote = TvWifiRemote(application, wifiTv)
+    private val tvDiscovery = TvDiscovery(application, wifiTv)
     var tvPairCodeNeeded by mutableStateOf(false); private set
     private var foreground = true
     private val recorder = AudioRecorder(application)
@@ -117,6 +118,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun foregrounded() { foreground = true }
     fun backgrounded() { foreground = false; cancelTvPair(); if (recording) { discardRecording(); message = "Rekaman dihentikan saat aplikasi ditutup. Silakan rekam ulang." }; stopPlayback() }
     fun cancelTvPair() { tvRemote.cancelPair(); tvPairCodeNeeded = false }
+    internal suspend fun discoverTvs() = tvDiscovery.find()
+
     fun pairTv(c: Child) = action {
         message = "Nyalakan TV dan setujui JagaBocil pada layar TV jika diminta."
         val paired = try { tvRemote.pair(c) } catch (error: java.io.IOException) { throw IllegalStateException("TV belum bisa dihubungi. Nyalakan TV, periksa IP dan jaringan Wi-Fi, lalu coba pairing lagi.", error) }

@@ -16,7 +16,7 @@ Driver berikut sudah diimplementasikan dan memiliki tes format protokol/akses. *
 
 1. Hubungkan HP anak ke Wi-Fi rumah. TV harus berada pada subnet IPv4 yang sama; TV dengan kabel LAN pada router yang sama juga dapat bekerja jika router mengizinkan akses/broadcast antarperangkat.
 2. Pada akun orang tua, buka **Keluarga → aturan anak → Sambungkan TV lewat → Wi-Fi yang sama**.
-3. Pilih Android/Google TV, Samsung Tizen, LG webOS, atau Wake-on-LAN saja.
+3. Tekan **Cari TV di Wi-Fi** saat TV menyala. Pilih perangkat untuk mengisi platform dan IP lokal. Pencarian membaca iklan mDNS Android/Google TV serta iklan SSDP Samsung dan LG. Pilih platform dan isi IP secara manual jika TV tidak muncul. Mode **Wake-on-LAN saja** memakai MAC yang dimasukkan manual.
 4. Isi IPv4 lokal TV (misalnya `192.168.1.20`) untuk tiga driver remote. Cari alamat tersebut pada pengaturan jaringan TV. Reservasi DHCP pada router membantu menjaga IP tetap sama.
 5. Isi MAC dari antarmuka jaringan TV yang sedang dipakai bila ingin mencoba wake jaringan. Untuk TV tersambung lewat Wi-Fi, gunakan MAC Wi-Fi, bukan MAC Ethernet. Mode Wake-on-LAN saja mewajibkan MAC.
 6. Simpan aturan. Izin lama dibatalkan. Pada **HP anak**, nyalakan TV memakai remote fisik lalu tekan **Hubungkan TV**. Untuk Google TV masukkan kode di layar; untuk Samsung/LG setujui permintaan akses.
