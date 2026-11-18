@@ -7,7 +7,8 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 ## Yang sudah tersedia
 
 - Daftar dan masuk dengan username dan kata sandi. Username 3–32 karakter, kata sandi minimal 4 karakter. Profil anak dihubungkan melalui kode enam angka, sekali pakai, kedaluwarsa 10 menit.
-- Tugas surah Al-Ikhlas, Al-Falaq, atau An-Nas; teks Arab, perekam mikrofon, pratinjau audio, dan unggah M4A.
+- Semua 37 surah Juz 30 tersedia di **Keluarga → Aturan bacaan**. Layar tugas menampilkan teks Arab per ayat dengan perekam, pratinjau audio, dan unggah M4A.
+- Menu **Al-Qur’an** dapat dibuka sebelum masuk. Juz 30 ikut di dalam APK. Untuk 77 surah lainnya, pilih surah dan tekan **Unduh surah**. Teks yang sudah diunduh tersimpan per HP dan dapat dibaca lagi tanpa internet.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
 - Notifikasi Android untuk rekaman baru dan hasil review. Aktifkan di **Keluarga** pada HP orang tua dan di **Panduan** pada HP anak. Aplikasi memeriksa saat dibuka dan memakai pekerjaan berkala saat di latar belakang. Android menjadwalkan pekerjaan tersebut dengan interval minimal 15 menit dan bisa menundanya.
 - Kode pemulihan sekali pakai tanpa email. Orang tua membuat kode di **Keluarga → Pemulihan akun** dengan kata sandi saat ini. Simpan kode saat ditampilkan. Untuk menggunakannya, pilih **Lupa kata sandi?** di layar masuk. Setelah berhasil, sesi lama akun orang tua berakhir dan perangkat anak tetap terhubung.
@@ -81,11 +82,17 @@ Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka paka
 
 ## Privasi dan akses
 
-Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di server, berlaku 30 hari, dan dienkripsi dengan Android Keystore di HP. API audio memerlukan autentikasi dan pemeriksaan kepemilikan keluarga. S3 hanya menggunakan prefix `jagabocil/`, enkripsi SSE-S3, dan respons audio melalui API keluarga; tidak ada URL publik rekaman. Saat startup mode S3, server memakai probe tanpa data anak pada prefix rekaman untuk memeriksa penolakan akses anonim sebelum menerima upload. Upload dibatasi 10 MB, 180 detik, serta format M4A/WAV; durasi diperiksa dari berkas oleh ffprobe, bukan dari klaim HP.
+Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di server, berlaku 30 hari, dan dienkripsi dengan Android Keystore di HP. API audio memerlukan autentikasi dan pemeriksaan kepemilikan keluarga. S3 hanya menggunakan prefix `jagabocil/`, enkripsi SSE-S3, dan respons audio melalui API keluarga; tidak ada URL publik rekaman. Saat startup mode S3, server memakai probe tanpa data anak pada prefix rekaman untuk memeriksa penolakan akses anonim sebelum menerima upload. Upload M4A/WAV dibatasi 10 MB. Durasi maksimal 180 detik untuk surah hingga 20 ayat dan 480 detik untuk surah yang lebih panjang. Server memeriksa durasi berkas menggunakan ffprobe.
 
 Kode pemulihan memiliki entropi 128 bit, disimpan sebagai hash, dan dikonsumsi atomik saat dipakai. Membuat kode baru membatalkan kode sebelumnya. Pemberitahuan Android hanya menyertakan status umum tanpa nama anak atau isi rekaman.
 
 Audio dan riwayat otomatis dihapus setelah 7 hari, melalui cleanup saat startup dan setiap jam. Jika penghapusan S3 gagal, metadata dipertahankan agar cleanup dapat mencoba ulang; rekaman yang sedang dihapus langsung diblokir dari playback dan izin power. Orang tua dapat menghapus lebih awal di riwayat. Cache audio HP dibersihkan setelah dipakai, logout, atau startup berikutnya; rekaman terputus saat aplikasi masuk background dibatalkan. Backup host, disk encryption, dan kebijakan penyedia AI mengikuti konfigurasi operator server. Jangan mengaktifkan AI tanpa memahami pemrosesan audio anak oleh penyedia.
+
+## Sumber Al-Qur’an
+
+Katalog menyimpan 114 surah dan 6.236 ayat dari [Tanzil Quran Text](https://tanzil.net/download/) edisi Uthmani 1.1, dengan urutan ayat yang diperiksa terhadap metadata Tanzil dan katalog Kebun Ngaji. Edisi Simple Clean dipakai sebagai pembanding transkripsi DeepSeek. Pemberitahuan hak cipta asli tersimpan bersama edisi masing-masing di `server/src/quran.json`. Teks Arab di Android menggunakan [Amiri Quran](https://github.com/aliftype/amiri/releases/tag/1.003) dengan lisensi SIL OFL yang ikut di APK.
+
+Build Android hanya menyalin teks Juz 30. Untuk surah di luar Juz 30, katalog lokal memuat nama, nomor, jumlah ayat, dan hash teks. APK memeriksa respons `GET /quran/surahs/:id` terhadap katalog itu sebelum menyimpan satu surah. Endpoint tersebut menyajikan teks publik tanpa memerlukan token keluarga.
 
 ## Verifikasi
 

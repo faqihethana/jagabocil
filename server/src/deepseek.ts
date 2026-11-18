@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { Verify } from './ai.js';
-import { surahs } from './catalog.js';
+import { transcriptionReference } from './catalog.js';
 
 const run = promisify(execFile);
 const transcription = z.object({ text: z.string() });
@@ -17,8 +17,8 @@ function normalizeArabic(text: string) {
 
 export function createDeepSeekVerifier(key: string, fetchAudio = globalThis.fetch): Verify {
   return async (audio, _mediaType, surahId, duration) => {
-    const surah = surahs.find(s => s.id === surahId);
-    if (!surah || !Number.isFinite(duration) || duration <= 0 || duration > 120) {
+    const reference = transcriptionReference(surahId);
+    if (!reference || !Number.isFinite(duration) || duration <= 0 || duration > 120) {
       throw Error('Recording cannot be sent to DeepSeek ASR.');
     }
 
@@ -51,8 +51,9 @@ export function createDeepSeekVerifier(key: string, fetchAudio = globalThis.fetc
     }
     const { text } = transcription.parse(await response.json());
     const normalized = normalizeArabic(text);
-    const expected = normalizeArabic(surah.arabic);
     const basmala = normalizeArabic('بسم الله الرحمن الرحيم');
+    const withBasmala = normalizeArabic(reference);
+    const expected = withBasmala.startsWith(basmala) ? withBasmala.slice(basmala.length) : withBasmala;
     const matchesSurah = normalized === expected || normalized === basmala + expected;
     // A transcript can match exactly without establishing that anyone recited it clearly.
     return { isRecitation: false, matchesSurah, coverage: matchesSurah ? 1 : 0, confidence: 0,

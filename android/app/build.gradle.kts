@@ -1,3 +1,8 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+import java.util.HexFormat
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,8 +17,8 @@ android {
         applicationId = "com.jagabocil.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.3"
+        versionCode = 6
+        versionName = "0.2.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -23,6 +28,44 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+
+abstract class BundleQuran : DefaultTask() {
+    @get:InputFile abstract val snapshot: RegularFileProperty
+    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction fun generate() {
+        val source = JsonSlurper().parse(snapshot.get().asFile, "UTF-8") as Map<*, *>
+        val chapters = (source["chapters"] as List<*>).map { it as Map<*, *> }
+        val juz30Start = source["juz30Start"] as Int
+        val sha256 = MessageDigest.getInstance("SHA-256")
+        val entries = chapters.map { chapter ->
+            val id = chapter["id"] as String
+            val ayahs = chapter["ayahs"] as List<*>
+            val entry = mutableMapOf("id" to id, "name" to chapter["name"], "verses" to ayahs.size)
+            if (id.toInt() >= juz30Start) {
+                entry["ayahs"] = ayahs
+                entry["maxRecordingSeconds"] = chapter["maxRecordingSeconds"]
+            } else {
+                entry["sha256"] = HexFormat.of().formatHex(sha256.digest(ayahs.joinToString("\n").toByteArray()))
+            }
+            entry
+        }
+        val output = outputDirectory.get().asFile
+        output.mkdirs()
+        output.resolve("quran-catalog.json").writeText(JsonOutput.toJson(mapOf(
+            "chapters" to entries,
+            "notice" to source["notice"],
+        )))
+    }
+}
+
+val bundleQuran = tasks.register<BundleQuran>("bundleQuran") {
+    snapshot.set(rootProject.layout.projectDirectory.file("../server/src/quran.json"))
+    outputDirectory.set(layout.buildDirectory.dir("generated/quran-assets"))
+}
+androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(bundleQuran, BundleQuran::outputDirectory)
 }
 
 dependencies {

@@ -29,6 +29,7 @@ test('Gemini adapter sends inline audio, stateless interaction, and JSON schema 
 });
 
 test('DeepSeek receives PCM WAV and recognizes a matching transcript without approving', async () => {
+  let opening = 'بسم الله الرحمن الرحيم. ';
   const verify = createDeepSeekVerifier('test-key-only', async (url, init) => {
     assert.equal(url, 'https://api.deepseek.com/v1/tools/asr');
     assert.equal(init?.headers && new Headers(init.headers).get('authorization'), 'Bearer test-key-only');
@@ -40,10 +41,12 @@ test('DeepSeek receives PCM WAV and recognizes a matching transcript without app
     assert.equal(audio.toString('ascii', 8, 12), 'WAVE');
     assert.equal(audio.readUInt32LE(24), 16_000);
     assert.equal(audio.readUInt16LE(34), 16);
-    return Response.json({ text: 'بسم الله الرحمن الرحيم. قل هو الله أحد، الله الصمد، لم يلد ولم يولد، ولم يكن له كفوا أحد.' });
+    return Response.json({ text: opening + 'قل هو الله أحد، الله الصمد، لم يلد ولم يولد، ولم يكن له كفوا أحد.' });
   });
   const result = await verify(wav(11), 'audio/wav', '112', 11);
   assert.equal(result.matchesSurah, true);
   assert.equal(passes(result), false);
+  opening = '';
+  assert.equal((await verify(wav(11), 'audio/wav', '112', 11)).matchesSurah, true);
   await assert.rejects(verify(wav(11), 'audio/wav', '112', 121), /cannot be sent/);
 });

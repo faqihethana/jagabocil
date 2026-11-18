@@ -21,7 +21,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class Dashboard(
     val role: String, val name: String, val aiAvailable: Boolean, val children: List<Child>,
     val recitations: List<Recitation>, val surahs: List<Surah>, val serverTime: Long,
-    val recoveryConfigured: Boolean = false,
+    val recoveryConfigured: Boolean = false, val juz30Tasks: Boolean = false,
 )
 @Serializable data class RecoveryCode(val code: String)
 @Serializable data class PairCode(val code: String, val expiresAt: Long)

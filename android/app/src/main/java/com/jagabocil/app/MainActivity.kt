@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,7 +68,7 @@ class MainActivity : ComponentActivity() {
     val snackbar = remember { SnackbarHostState() }
     val owner = LocalLifecycleOwner.current
     val context = LocalContext.current
-    androidx.activity.compose.BackHandler(enabled = vm.dashboard != null && vm.screen != "home" && vm.screen != "record") {
+    androidx.activity.compose.BackHandler(enabled = vm.screen == "quran" || vm.dashboard != null && vm.screen != "home" && vm.screen != "record") {
         vm.screen = if (vm.screen.startsWith("settings:")) "family" else "home"
     }
     DisposableEffect(owner) {
@@ -91,6 +92,7 @@ class MainActivity : ComponentActivity() {
                 NavigationBar(containerColor = Cream, tonalElevation = 0.dp) {
                     NavigationBarItem(selected = vm.screen == "home", onClick = { vm.screen = "home" }, icon = { Icon(Icons.Outlined.Home, null) }, label = { Text("Beranda") })
                     NavigationBarItem(selected = vm.screen == "history", onClick = { vm.screen = "history" }, icon = { Icon(Icons.Outlined.History, null) }, label = { Text("Riwayat") })
+                    NavigationBarItem(selected = vm.screen == "quran", onClick = { vm.screen = "quran" }, icon = { Icon(Icons.AutoMirrored.Outlined.MenuBook, null) }, label = { Text("Al-Qur’an", maxLines = 1) })
                     NavigationBarItem(selected = vm.screen == "family", onClick = { vm.screen = "family" }, icon = { Icon(if (parent) Icons.Outlined.People else Icons.Outlined.Info, null) }, label = { Text(if (parent) "Keluarga" else "Panduan") })
                 }
             }
@@ -99,12 +101,14 @@ class MainActivity : ComponentActivity() {
             if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Forest, trackColor = Lime)
             val data = vm.dashboard
             when {
+                vm.screen == "quran" -> QuranScreen(vm.quran, vm.api) { vm.screen = "home" }
                 data == null && !vm.loggedIn -> Welcome(vm)
                 data == null -> Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Menyambungkan keluarga…", style = MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(20.dp))
                     Button(onClick = vm::refresh, enabled = !vm.busy) { Text("Coba lagi") }
                     TextButton(onClick = vm::logout, enabled = !vm.busy) { Text("Kembali ke halaman masuk") }
+                    TextButton(onClick = { vm.screen = "quran" }) { Text("Baca Al-Qur’an") }
                 }
                 vm.screen == "record" -> RecorderScreen(vm, data)
                 vm.screen.startsWith("settings:") -> data.children.find { it.id == vm.screen.substringAfter(':') }?.let { SettingsScreen(vm, data, it) }
@@ -170,7 +174,11 @@ class MainActivity : ComponentActivity() {
         else -> username.isNotBlank() && password.isNotEmpty()
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Brand()
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Brand()
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { vm.screen = "quran" }) { Text("Baca Al-Qur’an") }
+        }
         Surface(color = Forest, shape = RoundedCornerShape(28.dp)) {
             Column(Modifier.fillMaxWidth().padding(26.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("KEBIASAAN KECIL, PAHALA BESAR", color = Lime, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
@@ -225,7 +233,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun ChildHome(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
-    val surah = data.surahs.first { it.id == child.surahId }
+    val surah = vm.quran.chapter(child.surahId) ?: return
     var now by remember { mutableLongStateOf(vm.serverNow()) }
     LaunchedEffect(Unit) { while (true) { now = vm.serverNow(); delay(1000) } }
     val approved = data.recitations.firstOrNull { it.canUse(now) }
@@ -313,31 +321,33 @@ class MainActivity : ComponentActivity() {
         if (pending.isEmpty()) EmptyCard("Semua sudah didengar", "Rekaman baru dari anak akan muncul di sini. Halaman diperbarui otomatis.")
         pending.forEach { RecordingCard(vm, data, it, true) }
         Text("KELUARGAMU", color = Muted, fontSize = 11.sp, letterSpacing = 1.5.sp)
-        data.children.forEach { ChildCard(vm, data, it) }
+        data.children.forEach { ChildCard(vm, it) }
     }
 }
 
 @Composable private fun RecorderScreen(vm: AppViewModel, data: Dashboard) {
     val context = LocalContext.current
     val c = data.children.first()
-    val surah = data.surahs.first { it.id == c.surahId }
+    val surah = vm.quran.chapter(c.surahId) ?: return
+    val ayahs = surah.ayahs ?: return
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.startRecording() else vm.message = "Izinkan mikrofon untuk merekam bacaanmu."
     }
     androidx.activity.compose.BackHandler { if (vm.recording || vm.recordedFile != null) vm.message = "Selesaikan atau hapus rekaman dulu, ya." else vm.screen = "home" }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { if (vm.recording || vm.recordedFile != null) vm.message = "Selesaikan atau hapus rekaman dulu, ya." else vm.screen = "home" }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
-            Text("Waktunya mengaji", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-        }
-        Pill("BACA PELAN, DENGAN HATI", Soft, Forest)
-        Text(surah.name, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text("${surah.verses} ayat · Minimal ${c.minSeconds} detik", color = Muted)
-        Surface(color = Color.White, shape = RoundedCornerShape(26.dp)) {
-            Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 24.sp, lineHeight = 40.sp)
-                Text(surah.arabic, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 28.sp, lineHeight = 55.sp)
+            Column {
+                Text(surah.name, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                Text("${surah.verses} ayat · Minimal ${c.minSeconds} detik", color = Muted, fontSize = 12.sp)
             }
+        }
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            quranVerses(surah.id, ayahs)
+            item { QuranAttribution() }
         }
         Text("%02d:%02d".format(vm.seconds / 60, vm.seconds % 60), fontSize = 38.sp, fontWeight = FontWeight.Light, color = if (vm.recording) Forest else Muted)
         Text(when { vm.recording -> "● Merekam… lanjutkan sampai semua ayat selesai"; vm.recordedFile != null -> "Bacaanmu siap dikirim"; else -> "Cari tempat tenang, lalu tekan mulai" }, color = Muted, textAlign = TextAlign.Center, fontSize = 13.sp)
@@ -359,7 +369,11 @@ class MainActivity : ComponentActivity() {
             }
             if (vm.recording) TextButton(onClick = vm::discardRecording) { Text("Batalkan rekaman") }
         }
-        Text(if (c.mode == "ai") "Audio dikirim ke penyedia AI untuk pemeriksaan. Jika ragu, orang tua akan mendengarkan. AI belum menilai tajwid secara menyeluruh." else "Salinan rekaman akan masuk ke akun orang tua untuk didengarkan dan disetujui.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
+        Text(
+            if (c.mode == "ai") "Audio dikirim ke penyedia AI untuk pemeriksaan. AI belum menilai tajwid secara menyeluruh."
+            else "Salinan rekaman akan masuk ke akun orang tua.",
+            color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -378,7 +392,7 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.size(42.dp).background(Soft, CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Outlined.MenuBook, null) }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(data.surahs.first { it.id == r.surahId }.name, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                    Text(vm.quran.name(r.surahId), fontWeight = FontWeight.Bold, fontSize = 17.sp)
                     Text("${data.children.find { it.id == r.childId }?.name.orEmpty()} · ${r.duration.roundToInt()} dtk · ${time(r.createdAt)}", color = Muted, fontSize = 12.sp)
                 }
                 IconButton(onClick = { vm.play(r) }, enabled = !vm.busy) { Icon(if (vm.playing == r.id) Icons.Outlined.StopCircle else Icons.Outlined.PlayCircle, if (vm.playing == r.id) "Hentikan" else "Dengarkan rekaman", tint = Forest, modifier = Modifier.size(32.dp)) }
@@ -402,14 +416,14 @@ class MainActivity : ComponentActivity() {
 @Composable private fun Family(vm: AppViewModel, data: Dashboard) {
     Text("Ruang keluarga", fontSize = 28.sp, fontWeight = FontWeight.Bold)
     Text("Atur bacaan, metode pemeriksaan, dan profil TV untuk masing-masing anak.", color = Muted)
-    data.children.forEach { ChildCard(vm, data, it) }
+    data.children.forEach { ChildCard(vm, it) }
     AddChild(vm)
     NotificationSetting(vm, parent = true)
     RecoverySetting(vm, data.recoveryConfigured)
     Text("Kode penghubung hanya untuk HP anak. Jangan bagikan kata sandi akun orang tua.", fontSize = 12.sp, color = Muted)
 }
 
-@Composable private fun ChildCard(vm: AppViewModel, data: Dashboard, child: Child) {
+@Composable private fun ChildCard(vm: AppViewModel, child: Child) {
     Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -417,7 +431,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(child.name, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    Text("${data.surahs.first { it.id == child.surahId }.name} · ${if (child.mode == "ai") "Verifikasi AI" else "Diperiksa orang tua"}", color = Muted, fontSize = 12.sp)
+                    Text("${vm.quran.name(child.surahId)} · ${if (child.mode == "ai") "Verifikasi AI" else "Diperiksa orang tua"}", color = Muted, fontSize = 12.sp)
                 }
                 IconButton(onClick = { vm.screen = "settings:${child.id}" }) { Icon(Icons.Outlined.Tune, "Atur ${child.name}") }
             }
@@ -450,6 +464,9 @@ class MainActivity : ComponentActivity() {
     var consent by remember(child.id) { mutableStateOf(child.aiConsent) }
     var revoke by remember { mutableStateOf(false) }
     var showDiscovery by remember(child.id) { mutableStateOf(false) }
+    var showSurahs by remember(child.id) { mutableStateOf(false) }
+    val taskSurahs = if (data.juz30Tasks) vm.quran.juz30
+        else vm.quran.juz30.filter { chapter -> data.surahs.any { it.id == chapter.id } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { vm.screen = "family" }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
@@ -473,7 +490,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         Text("Surah yang dibaca", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        data.surahs.forEach { s -> Choice("${s.name} · ${s.verses} ayat", surah == s.id, Modifier.fillMaxWidth()) { surah = s.id } }
+        vm.quran.chapter(surah)?.let { selected -> Text("${selected.name} · ${selected.verses} ayat") }
+        OutlinedButton(onClick = { showSurahs = true }, enabled = taskSurahs.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+            Text("Pilih surah")
+        }
         Column {
             Text("Rekaman minimal ${seconds.roundToInt()} detik", fontWeight = FontWeight.Bold)
             Slider(value = seconds, onValueChange = { seconds = it }, valueRange = 10f..120f, steps = 21)
@@ -516,6 +536,10 @@ class MainActivity : ComponentActivity() {
         Button(onClick = { vm.policy(child, Policy(mode, surah, seconds.roundToInt(), minutes.roundToInt(), brand, consent, transport, mac, platform, host)) }, enabled = !vm.busy && validConnection && (mode != "ai" || consent && data.aiAvailable), modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("Simpan aturan") }
         Text("Menyimpan aturan membatalkan izin lama agar tugas baru tidak terlewati.", color = Muted, fontSize = 12.sp)
         OutlinedButton(onClick = { revoke = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Putuskan semua HP anak") }
+    }
+    if (showSurahs) QuranTaskPicker(taskSurahs, surah, { showSurahs = false }) {
+        surah = it
+        showSurahs = false
     }
     if (showDiscovery) TvDiscoveryDialog(
         vm,

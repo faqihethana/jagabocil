@@ -8,7 +8,7 @@ import java.io.File
 class AudioRecorder(private val context: Context) {
     private var recorder: MediaRecorder? = null
     var file: File? = null; private set
-    fun start() {
+    fun start(maxSeconds: Int) {
         discard()
         val target = File.createTempFile("ngaji-", ".m4a", context.cacheDir)
         file = target
@@ -22,7 +22,7 @@ class AudioRecorder(private val context: Context) {
             audio.setAudioSamplingRate(44100)
             audio.setAudioEncodingBitRate(96000)
             audio.setOutputFile(target.absolutePath)
-            audio.setMaxDuration(180_000)
+            audio.setMaxDuration(maxSeconds * 1000)
             audio.prepare(); audio.start()
         } catch (e: Exception) { discard(); throw e }
     }

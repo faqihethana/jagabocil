@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { surahs } from './catalog.js';
+import { isTaskSurah, legacySurahs, quranNotice, quranText, taskRecordingLimit } from './catalog.js';
 import { passes, verdictSchema, type Verify } from './ai.js';
 
 const run = promisify(execFile);
@@ -118,7 +118,10 @@ export async function createApp(options: Options) {
   cleanupTimer.unref();
   app.addHook('onClose', async () => { clearInterval(cleanupTimer); await db.close(); });
 
-  app.get('/health', async () => ({ ok: true, aiAvailable: aiProvider !== null, aiProvider, database: db.kind, audioStore: recordings.kind, surahs }));
+  app.get('/health', async () => ({ ok: true, aiAvailable: aiProvider !== null, aiProvider, database: db.kind, audioStore: recordings.kind, surahs: legacySurahs(), quranNotice }));
+  app.get<{ Params: { id: string } }>('/quran/surahs/:id', async req => {
+    return quranText(req.params.id) ?? fail(404, 'Surah tidak ditemukan.');
+  });
   const credentials = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(128) });
   const newPassword = z.string().min(4).max(128);
   const registration = credentials.extend({
@@ -196,7 +199,7 @@ export async function createApp(options: Options) {
   });
   app.put('/children/:id/policy', async req => {
     const a = await actor(req, 'parent'); const c = (await childFor(a, paramId(req)));
-    const p = z.object({ mode: z.enum(['manual', 'ai']), surahId: z.enum(['112', '113', '114']), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), tvBrand: z.enum(['none', 'samsung', 'lg']), aiConsent: z.boolean(), tvPlatform: z.enum(['wol', 'androidtv', 'samsung', 'lg']).default('wol'), tvHost: z.string().trim().max(15).default(''), tvTransport: z.enum(['infrared', 'wifi']).default('infrared'), tvMac: z.string().trim().toUpperCase().regex(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$|^$/).default('') }).parse(req.body);
+    const p = z.object({ mode: z.enum(['manual', 'ai']), surahId: z.string().refine(isTaskSurah), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), tvBrand: z.enum(['none', 'samsung', 'lg']), aiConsent: z.boolean(), tvPlatform: z.enum(['wol', 'androidtv', 'samsung', 'lg']).default('wol'), tvHost: z.string().trim().max(15).default(''), tvTransport: z.enum(['infrared', 'wifi']).default('infrared'), tvMac: z.string().trim().toUpperCase().regex(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$|^$/).default('') }).parse(req.body);
     if ((p.tvTransport === 'wifi' && p.tvPlatform === 'wol' || p.tvMac) && (!p.tvMac || p.tvMac === '00:00:00:00:00:00' || (parseInt(p.tvMac.slice(0, 2), 16) & 1) !== 0)) return fail(400, 'Masukkan MAC Wi-Fi TV yang valid dan bukan alamat multicast.');
     if (p.tvTransport === 'wifi' && p.tvPlatform !== 'wol' && !isPrivateIpv4(p.tvHost)) return fail(400, 'Masukkan alamat IPv4 lokal TV yang valid.');
     if (p.mode === 'ai' && (!p.aiConsent || !aiProvider)) return fail(400, 'AI perlu persetujuan orang tua dan konfigurasi server.');
@@ -214,7 +217,9 @@ export async function createApp(options: Options) {
       ? (await all<Recitation>("SELECT r.* FROM recitations r JOIN children c ON c.id=r.child_id WHERE c.parent_id=? AND r.status NOT IN ('uploading','failed','deleting') ORDER BY r.created_at DESC LIMIT 100", a.id))
       : (await all<Recitation>("SELECT * FROM recitations WHERE child_id=? AND status NOT IN ('uploading','failed','deleting') ORDER BY created_at DESC LIMIT 50", a.id));
     const parent = a.role === 'parent' ? await one<{ name: string; recovery_hash: string | null }>('SELECT name,recovery_hash FROM parents WHERE id=?', a.id) : undefined;
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, serverTime: now() };
+    const localQuran = (req.query as { quran?: string }).quran === 'local';
+    const surahs = localQuran ? [] : legacySurahs([...children.map(c => c.surah_id), ...recs.map(r => r.surah_id)]);
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now() };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));
@@ -225,6 +230,7 @@ export async function createApp(options: Options) {
       else if (part.fieldname === 'surahId') surahId = String(part.value);
     }
     if (!buffer?.length || surahId !== c.surah_id) return fail(400, 'Kirim rekaman sesuai surah tugasmu.');
+    const maxSeconds = taskRecordingLimit(surahId);
     const id = randomUUID(); const path = join(dataDir, 'tmp', `${id}.audio`);
     await writeFile(path, buffer, { mode: 0o600 });
     let duration: number; let mime: string;
@@ -232,10 +238,10 @@ export async function createApp(options: Options) {
       const { stdout } = await run('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'mov,wav', '-show_entries', 'format=duration,format_name:stream=codec_type', '-of', 'json', path], { timeout: 10_000, maxBuffer: 64_000 });
       const meta = JSON.parse(stdout);
       duration = Number(meta.format?.duration);
-      if (!Number.isFinite(duration) || duration < c.min_seconds || duration > 180 || !meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'audio') || meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'video')) throw new Error('invalid audio');
+      if (!Number.isFinite(duration) || duration < c.min_seconds || duration > maxSeconds || !meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'audio') || meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'video')) throw new Error('invalid audio');
       mime = meta.format.format_name === 'wav' ? 'audio/wav' : 'audio/mp4';
     } catch {
-      return fail(400, `Gunakan rekaman audio M4A/WAV sepanjang ${c.min_seconds}–180 detik.`);
+      return fail(400, `Gunakan rekaman audio M4A/WAV sepanjang ${c.min_seconds}–${maxSeconds} detik.`);
     } finally { await unlink(path).catch(() => {}); }
     const reference = recordings.reference(id, c.id);
     const inserted = (await change('INSERT INTO recitations(id,child_id,surah_id,status,duration,path,mime,created_at,feedback) SELECT ?,?,?,?,?,?,?,?,? FROM children WHERE id=? AND revision=?', id, c.id, surahId, 'uploading', duration, reference, mime, now(), 'Menunggu orang tua mendengarkan.', c.id, c.revision));

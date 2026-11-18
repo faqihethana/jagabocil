@@ -37,10 +37,12 @@ class Api(var baseUrl: String, var token: String = "") {
         .followRedirects(false).followSslRedirects(false).build()
     fun body(vararg values: Pair<String, String>) = buildJsonObject { values.forEach { put(it.first, it.second) } }.toString()
         .toRequestBody("application/json".toMediaType())
-    suspend fun request(path: String, method: String = "GET", body: RequestBody? = null): String = withContext(Dispatchers.IO) {
+    suspend fun request(
+        path: String, method: String = "GET", body: RequestBody? = null, authenticated: Boolean = true,
+    ): String = withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(baseUrl.trimEnd('/') + path)
             .method(method, body ?: if (method in listOf("POST", "PUT")) "{}".toRequestBody("application/json".toMediaType()) else null)
-        if (token.isNotBlank()) builder.header("Authorization", "Bearer $token")
+        if (authenticated && token.isNotBlank()) builder.header("Authorization", "Bearer $token")
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw ApiError(response.code,
@@ -48,7 +50,10 @@ class Api(var baseUrl: String, var token: String = "") {
             text
         }
     }
-    suspend fun dashboard() = json.decodeFromString<Dashboard>(request("/dashboard"))
+    suspend fun dashboard() = json.decodeFromString<Dashboard>(request("/dashboard?quran=local"))
+    internal suspend fun quranText(id: String) = json.decodeFromString<QuranText>(
+        request("/quran/surahs/$id", authenticated = false),
+    )
     suspend fun audio(id: String, file: File) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url("${baseUrl.trimEnd('/')}/recitations/$id/audio").header("Authorization", "Bearer $token").build()
         http.newCall(request).execute().use {

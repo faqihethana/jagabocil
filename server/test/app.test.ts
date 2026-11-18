@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import { postgresDatabase } from '../src/database.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Verify } from '../src/ai.js';
+import { isTaskSurah, quranText } from '../src/catalog.js';
 
 import { wav, multipart } from './fixtures.js';
 const root = await mkdtemp(join(tmpdir(), 'jagabocil-test-'));
@@ -293,4 +294,50 @@ test('expired recordings cannot be reviewed or replayed and cleanup removes thei
     assert.equal((await readdir(join(dir, 'recordings'))).length, 0);
     assert.equal((await retentionApp.inject({ method: 'GET', url: '/dashboard', headers })).json().recitations.length, 0);
   } finally { await retentionApp.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('the Quran catalog preserves the full source and downloads one surah at a time', async () => {
+  const hash = createHash('sha256');
+  let verseCount = 0;
+  let juz30Count = 0;
+  for (let chapter = 1; chapter <= 114; chapter++) {
+    const text = quranText(String(chapter))!;
+    assert.ok(text.ayahs.length);
+    for (const [index, ayah] of text.ayahs.entries()) hash.update(`${chapter}|${index + 1}|${ayah}\n`);
+    verseCount += text.ayahs.length;
+    if (isTaskSurah(String(chapter))) juz30Count++;
+  }
+  assert.equal(verseCount, 6236);
+  assert.equal(juz30Count, 37);
+  assert.equal(hash.digest('hex'), '76781116345a687997d203ae154d64ceae9d06722139cd0e454c0d446f6da1d8');
+  const download = (await request('GET', '/quran/surahs/2')).json();
+  assert.deepEqual(download, quranText('2'));
+  assert.equal(download.ayahs.length, 286);
+  assert.match(download.notice, /Tanzil Project/);
+  for (const id of ['0', '02', '115']) {
+    assert.equal((await request('GET', `/quran/surahs/${id}`)).statusCode, 404);
+  }
+});
+
+test('a long Juz 30 assignment accepts the matching recording and old clients can open it', async () => {
+  const session = (await request('POST', '/auth/register', '', { username: 'Juz30Demo', password: 'test' })).json().token;
+  const created = (await request('POST', '/children', session, { name: 'Anak' })).json();
+  const childSession = (await request('POST', '/pair', '', { code: created.pairing.code })).json().token;
+  const policyPath = `/children/${created.child.id}/policy`;
+  assert.equal((await request('PUT', policyPath, session, { ...policy, surahId: '77' })).statusCode, 400);
+  assert.equal((await request('PUT', policyPath, session, { ...policy, surahId: '78' })).statusCode, 200);
+  assert.equal((await upload(childSession, wav(181), '112')).statusCode, 400);
+  assert.equal((await upload(childSession, wav(481), '78')).statusCode, 400);
+  const submitted = await upload(childSession, wav(181), '78');
+  assert.equal(submitted.statusCode, 201);
+  assert.equal(submitted.json().recitation.surahId, '78');
+  const dashboard = (await request('GET', '/dashboard?quran=local', childSession)).json();
+  assert.equal(dashboard.juz30Tasks, true);
+  assert.deepEqual(dashboard.surahs, []);
+  assert.equal(dashboard.quranNotice, undefined);
+  assert.equal(dashboard.children[0].surahId, '78');
+  const legacy = (await request('GET', '/dashboard', childSession)).json();
+  const assigned = legacy.surahs.find((surah: { id: string }) => surah.id === '78');
+  assert.equal(assigned.verses, 40);
+  assert.equal(assigned.arabic.startsWith(quranText('1')!.ayahs[0]!), false);
 });

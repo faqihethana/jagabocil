@@ -1,7 +1,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
-import { surahs } from './catalog.js';
+import { taskSurah } from './catalog.js';
 
 export const verdictSchema = z.object({
   isRecitation: z.boolean(), matchesSurah: z.boolean(),
@@ -13,7 +13,8 @@ export type Verify = (audio: Buffer, mediaType: string, surahId: string, duratio
 export function createVerifier(key: string, model: string, fetch?: typeof globalThis.fetch): Verify {
   const google = createGoogleGenerativeAI({ apiKey: key, fetch });
   return async (audio, mediaType, surahId) => {
-    const surah = surahs.find(s => s.id === surahId)!;
+    const surah = taskSurah(surahId);
+    if (!surah) throw new Error('Unknown task surah.');
     const { output } = await generateText({
       model: google.interactions(model),
       reasoning: 'low',

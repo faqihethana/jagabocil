@@ -24,6 +24,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SessionStore(application)
     val api = Api(store.server(), store.token())
+    internal val quran = QuranLibrary(application)
     val infrared = Infrared(application)
     val wifiTv = WifiTv(application)
     val tvRemote = TvWifiRemote(application, wifiTv)
@@ -37,6 +38,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var player: MediaPlayer? = null
     private var playbackFile: File? = null
     private var ticker: Job? = null
+    private var recordedSurahId: String? = null
     private var clockOffset = 0L
     var dashboard by mutableStateOf<Dashboard?>(null); private set
     var busy by mutableStateOf(false); private set
@@ -156,13 +158,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun deleteRecording(id: String) = action { stopPlayback(); api.request("/recitations/$id", "DELETE"); load() }
     fun startRecording() {
+        val chapter = dashboard?.children?.firstOrNull()?.surahId?.let(quran::chapter) ?: return
+        val maxSeconds = chapter.maxRecordingSeconds
         try {
-            stopPlayback(); recorder.start(); recordedFile = null; seconds = 0; recording = true
+            stopPlayback()
+            recorder.start(maxSeconds)
+            recordedSurahId = chapter.id
+            recordedFile = null; seconds = 0; recording = true
             val started = SystemClock.elapsedRealtime()
             ticker = viewModelScope.launch {
                 while (recording) {
                     delay(200); seconds = ((SystemClock.elapsedRealtime() - started) / 1000).toInt()
-                    if (seconds >= 175) finishRecording()
+                    if (seconds >= maxSeconds - 5) finishRecording()
                 }
             }
         } catch (_: Exception) { message = "Mikrofon belum bisa dipakai. Cek izin mikrofon, lalu coba lagi." }
@@ -172,7 +179,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ticker?.cancel(); recording = false
         try { recordedFile = recorder.stop() } catch (_: Exception) { recordedFile = null; message = "Rekaman terlalu singkat atau terputus. Yuk, ulangi." }
     }
-    fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; seconds = 0 }
+    fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; recordedSurahId = null; seconds = 0 }
     fun foregrounded() {
         val wasActive = foreground
         foreground = true
@@ -209,7 +216,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun upload() = action {
         val child = dashboard?.children?.firstOrNull() ?: return@action
         val file = recordedFile ?: return@action
-        api.upload(file, child.surahId); discardRecording(); load(); screen = "home"
+        val surahId = recordedSurahId ?: return@action
+        require(surahId == child.surahId) { "Surah tugas berubah. Hapus rekaman ini dan mulai lagi." }
+        api.upload(file, surahId); discardRecording(); load(); screen = "home"
         message = "Rekaman terkirim. Terima kasih sudah mengaji!"
     }
     fun play(rec: Recitation) = action {
