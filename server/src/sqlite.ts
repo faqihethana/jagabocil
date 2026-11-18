@@ -4,7 +4,7 @@ import type { Database } from './database.js';
 export function sqliteDatabase(path: string): Database {
   const db = new DatabaseSync(path);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
-    CREATE TABLE IF NOT EXISTS parents(id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL, password TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS parents(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, password TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS children(id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parents(id), name TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'manual', surah_id TEXT NOT NULL DEFAULT '112', min_seconds INTEGER NOT NULL DEFAULT 15,
       unlock_minutes INTEGER NOT NULL DEFAULT 15, tv_brand TEXT NOT NULL DEFAULT 'none', ai_consent INTEGER NOT NULL DEFAULT 0,
@@ -17,10 +17,11 @@ export function sqliteDatabase(path: string): Database {
     CREATE INDEX IF NOT EXISTS recitations_child_date ON recitations(child_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS tokens_subject ON tokens(subject_id);
     CREATE UNIQUE INDEX IF NOT EXISTS children_pair ON children(pair_hash) WHERE pair_hash IS NOT NULL;`);
-  // Additive migration preserves existing families and keeps their IR configuration.
-  const columns = new Set((db.prepare('PRAGMA table_info(children)').all() as { name: string }[]).map(c => c.name));
   db.exec('BEGIN IMMEDIATE');
   try {
+    const accountColumns = db.prepare('PRAGMA table_info(parents)').all();
+    if (accountColumns.some(column => column.name === 'email')) db.exec('ALTER TABLE parents RENAME COLUMN email TO username');
+    const columns = new Set(db.prepare('PRAGMA table_info(children)').all().map(column => column.name));
     if (!columns.has('tv_transport')) db.exec("ALTER TABLE children ADD COLUMN tv_transport TEXT NOT NULL DEFAULT 'infrared'");
     if (!columns.has('tv_mac')) db.exec("ALTER TABLE children ADD COLUMN tv_mac TEXT NOT NULL DEFAULT ''");
     if (!columns.has('tv_platform')) db.exec("ALTER TABLE children ADD COLUMN tv_platform TEXT NOT NULL DEFAULT 'wol'");

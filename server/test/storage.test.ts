@@ -48,8 +48,8 @@ const upload = () => {
   return app.inject({ method: 'POST', url: '/recitations', payload: parts.payload, headers: { ...parts.headers, authorization: `Bearer ${child}` } });
 };
 before(async () => {
-  parent = (await api('POST', '/auth/register', '', { email: 's3@example.com', name: 'Ayah', password: 'kata-sandi-kuat' })).json().token;
-  outsider = (await api('POST', '/auth/register', '', { email: 'outsider@example.com', name: 'Lain', password: 'kata-sandi-kuat' })).json().token;
+  parent = (await api('POST', '/auth/register', '', { username: 'Ayah', password: 'kata-sandi-kuat' })).json().token;
+  outsider = (await api('POST', '/auth/register', '', { username: 'KeluargaLain', password: 'kata-sandi-kuat' })).json().token;
   const created = (await api('POST', '/children', parent, { name: 'Adek' })).json(); childId = created.child.id;
   child = (await api('POST', '/pair', '', { code: created.pairing.code })).json().token;
   await api('PUT', `/children/${childId}/policy`, parent, { mode: 'manual', surahId: '112', minSeconds: 10, unlockMinutes: 15, tvBrand: 'lg', aiConsent: false });

@@ -6,10 +6,10 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 
 ## Yang sudah tersedia
 
-- Akun orang tua dengan kata sandi; profil anak dihubungkan melalui kode enam angka, sekali pakai, kedaluwarsa 10 menit.
+- Daftar dan masuk dengan username dan kata sandi. Username 3–32 karakter, kata sandi minimal 4 karakter. Profil anak dihubungkan melalui kode enam angka, sekali pakai, kedaluwarsa 10 menit.
 - Tugas surah Al-Ikhlas, Al-Falaq, atau An-Nas; teks Arab, perekam mikrofon, pratinjau audio, dan unggah M4A.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
-- **AI opsional:** Gemini menerima audio setelah persetujuan orang tua. Hanya bacaan yang dikenali lengkap dengan confidence dan coverage ≥95% yang disetujui otomatis. Kegagalan, hasil tidak valid, dan keraguan diteruskan ke antrean manual.
+- **AI opsional:** DeepSeek mencocokkan teks hasil transkripsi dengan surah tugas. Orang tua tetap mendengar rekaman dan memutuskan. Jika server memakai Gemini, bacaan yang dikenali lengkap dengan confidence dan coverage ≥95% bisa disetujui otomatis. Orang tua perlu menyetujui pengiriman audio ke penyedia yang aktif.
 - Izin server berlaku 1–60 menit setelah disetujui dan dikonsumsi atomik sekali saja. Mengganti aturan, mencabut perangkat, atau menghapus rekaman membatalkan izin yang belum dipakai.
 - Dua metode koneksi: **infrared** Samsung/LG 38 kHz atau **Wi-Fi lokal**. Pilihan platform Wi-Fi: Android TV/Google TV (Remote Service v2), Samsung Tizen (WSS), LG webOS (SSAP/WSS), dan Wake-on-LAN. Driver jaringan masih perlu pengujian pada TV fisik; lihat [matriks kompatibilitas](docs/tv-compatibility.md).
 - Riwayat, pemutaran audio privat, penghapusan oleh orang tua, pencabutan perangkat anak, serta pembaruan antrean setiap 10 detik.
@@ -30,7 +30,7 @@ AI membantu mengenali isi bacaan, belum menjamin tajwid, identitas pembaca, atau
 
 ## Menjalankan API
 
-Prasyarat: **Node.js 24.5+**, npm, dan `ffprobe` dari paket **FFmpeg** di PATH.
+Prasyarat: **Node.js 24.5+**, npm, dan `ffprobe` dari paket **FFmpeg** di PATH. Mode DeepSeek juga memakai `ffmpeg`.
 
 ```sh
 cd server
@@ -39,7 +39,11 @@ cp .env.example .env
 npm run dev
 ```
 
-API tersedia di `http://localhost:8787`; `GET /health` memeriksa API serta menampilkan jenis database/audio store tanpa login. `.env.local` yang gitignored dapat menimpa konfigurasi `.env`. Tanpa `DATABASE_URL`, data lokal tersimpan di `server/data/`; dengan URL, API memakai schema `jagabocil` di PostgreSQL. Lihat [setup Neon dan S3](docs/backend-storage.md). Untuk mode AI, isi `GEMINI_API_KEY` pada `.env`, lalu restart. `AI_MODEL` dapat diganti dengan model Gemini yang mendukung audio dan structured output pada Interactions API; default `gemini-4-hydrogen` mengikuti dokumentasi audio Google saat implementasi. Interaksi dikirim dengan `store: false`. Jika provider/model tidak tersedia, rekaman tetap masuk antrean orang tua. Key tidak pernah dimasukkan ke APK.
+API tersedia di `http://localhost:8787`. `GET /health` menampilkan jenis database, penyimpanan audio, dan penyedia AI aktif tanpa login. `.env.local` yang gitignored dapat menimpa konfigurasi `.env`. Tanpa `DATABASE_URL`, data lokal tersimpan di `server/data/`. Dengan URL, API memakai schema `jagabocil` di PostgreSQL. Lihat [setup Neon dan S3](docs/backend-storage.md).
+
+Isi `DEEPSEEK_API_KEY` di environment server untuk menggunakan [DeepSeek Speech to Text](https://api-docs.deepseek.com/guides/asr/). Server mengubah rekaman hingga 120 detik ke PCM WAV sebelum dikirim dan menyimpan hasil cocok atau tidak cocok sebagai catatan untuk orang tua. Teks transkripsi tidak disimpan. Rekaman yang lebih panjang atau gagal ditranskripsi tetap masuk antrean orang tua. Orang tua yang sebelumnya mengaktifkan Gemini harus menyimpan ulang persetujuan mode AI setelah penyedia berganti.
+
+Jika `DEEPSEEK_API_KEY` kosong, server dapat memakai `GEMINI_API_KEY`. `AI_MODEL` memilih model Gemini yang mendukung audio dan structured output pada Interactions API. Default-nya `gemini-4-hydrogen` dan interaksi dikirim dengan `store: false`. Simpan semua key di environment server.
 
 Alternatif Docker dari root repo:
 
@@ -49,7 +53,7 @@ docker compose up --build -d
 
 Compose membuka port hanya pada loopback. Pasang reverse proxy HTTPS untuk pemakaian dari dua HP. Untuk cloud, isi `DATABASE_URL`, jalankan migrasi dengan URL direct, dan set `AUDIO_STORE=s3` beserta konfigurasi AWS. SQLite/audio lokal menggunakan volume `family-data` dan membutuhkan satu instance dengan disk persisten. Pada Neon/S3, disk lokal dipakai sementara oleh ffprobe; data utama tersimpan di layanan cloud. Backup, HTTPS, dan deployment hosting tetap perlu disiapkan.
 
-Untuk AI pada Docker, ekspor `GEMINI_API_KEY` di shell atau isi `.env` di **root repo** sebelum menjalankan Compose. File `server/.env` dipakai oleh perintah npm.
+Untuk AI pada Docker, ekspor `DEEPSEEK_API_KEY` atau `GEMINI_API_KEY` di shell atau isi `.env` di **root repo** sebelum menjalankan Compose. File `server/.env` dipakai oleh perintah npm.
 
 ## Menjalankan Android
 
@@ -63,13 +67,15 @@ cd android
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
 1. Jalankan API, lalu buka APK pada emulator atau HP.
-2. Isi **Alamat server keluarga**. Emulator Android Studio memakai `http://10.0.2.2:8787`. Untuk HP asli gunakan URL **HTTPS** yang dapat diakses kedua perangkat.
+2. Isi **Alamat server JagaBocil**. Ini alamat backend yang menyimpan akun, rekaman, dan persetujuan. Emulator Android Studio memakai `http://10.0.2.2:8787`. Untuk HP asli gunakan satu URL **HTTPS** yang dapat diakses kedua perangkat.
 3. Pilih **Orang tua → Daftar**, buat profil anak di tab **Keluarga**, dan simpan aturan serta profil TV.
 4. Buat kode pairing. Di HP anak pilih **Aku anak**, gunakan server yang sama, masukkan kode.
 5. Anak merekam surah sesuai tugas. Orang tua memutar salinannya di antrean, lalu memilih **Setujui** atau **Ulangi**. Mode AI dapat diaktifkan pada aturan anak jika server sudah dikonfigurasi dan orang tua menyetujui pengiriman audio.
 6. Untuk infrared, arahkan IR blaster HP anak ke TV. Untuk Wi-Fi, pilih platform/IP/MAC pada aturan anak, lalu gunakan **Hubungkan TV** di HP anak saat TV menyala (kecuali mode Wake-on-LAN yang tidak memakai pairing). Setelah bacaan disetujui, tombol mengirim satu permintaan power melalui metode yang dipilih.
 
 HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Pemulihan kata sandi, notifikasi push, penemuan TV otomatis, dan distribusi Play Store belum tersedia.
+
+Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka pakai ke kolom Username. Nama tampilan dan kata sandi akun lama tetap bisa digunakan.
 
 ## Privasi dan akses
 

@@ -50,6 +50,7 @@ private val Lime = Color(0xFFD9F194)
 private val Muted = Color(0xFF63776E)
 private val Soft = Color(0xFFEAF0E8)
 private val Amber = Color(0xFF946025)
+private val UsernamePattern = Regex("[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}")
 private val AppColors = lightColorScheme(primary = Forest, onPrimary = Color.White, background = Cream,
     surface = Cream, onSurface = Forest, secondaryContainer = Lime, onSecondaryContainer = Forest, outline = Color(0xFFCED8CF))
 
@@ -157,10 +158,14 @@ class MainActivity : ComponentActivity() {
     var child by remember { mutableStateOf(false) }
     var register by remember { mutableStateOf(false) }
     var server by remember { mutableStateOf(vm.api.baseUrl) }
-    var email by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
+    val canSubmit = when {
+        child -> code.length == 6
+        register -> UsernamePattern.matches(username.trim()) && password.length in 4..128
+        else -> username.isNotBlank() && password.isNotEmpty()
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Brand()
         Surface(color = Forest, shape = RoundedCornerShape(28.dp)) {
@@ -184,13 +189,14 @@ class MainActivity : ComponentActivity() {
             Text(if (child) "Minta kode penghubung dari akun orang tuamu." else "Temani kebiasaan baik, satu bacaan setiap hari.", color = Muted, fontSize = 14.sp)
             if (child) Field("Kode dari orang tua", code, { code = it.filter(Char::isDigit).take(6) }, KeyboardType.Number)
             else {
-                if (register) Field("Nama orang tua", name, { name = it })
-                Field("Email", email, { email = it }, KeyboardType.Email)
-                OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Kata sandi · minimal 10 karakter") }, visualTransformation = PasswordVisualTransformation(), singleLine = true,
+                Field("Username", username, { username = it }, KeyboardType.Ascii)
+                if (register) Text("3–32 karakter. Mulai dengan huruf atau angka. Boleh memakai titik, garis bawah, dan tanda hubung.", color = Muted, fontSize = 12.sp)
+                OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text(if (register) "Kata sandi (min. 4 karakter)" else "Kata sandi") }, visualTransformation = PasswordVisualTransformation(), singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
             }
-            Field("Alamat server keluarga", server, { server = it }, KeyboardType.Uri)
-            Button(onClick = { vm.authenticate(server, email, password, name, code, child, register) }, enabled = !vm.busy && server.isNotBlank() && if (child) code.length == 6 else email.isNotBlank() && password.length >= 10 && (!register || name.isNotBlank()), modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) {
+            Field("Alamat server JagaBocil", server, { server = it }, KeyboardType.Uri)
+            Text("Pakai alamat HTTPS yang sama di HP orang tua dan HP anak.", color = Muted, fontSize = 12.sp)
+            Button(onClick = { vm.authenticate(server, username, password, code, child, register) }, enabled = !vm.busy && server.isNotBlank() && canSubmit, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) {
                 Text(if (child) "Hubungkan perangkat" else if (register) "Buat akun orang tua" else "Masuk", fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(10.dp)); Icon(Icons.Outlined.East, null, Modifier.size(18.dp))
             }

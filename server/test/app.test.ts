@@ -23,8 +23,8 @@ async function upload(token = child, audio = wav(11), surah = '112') {
   return app.inject({ method: 'POST', url: '/recitations', headers: { ...data.headers, authorization: `Bearer ${token}` }, payload: data.payload });
 }
 before(async () => {
-  parent = (await request('POST', '/auth/register', '', { email: 'parent@example.com', name: 'Ayah', password: 'kata-sandi-kuat' })).json().token;
-  outsider = (await request('POST', '/auth/register', '', { email: 'other@example.com', name: 'Lain', password: 'kata-sandi-kuat' })).json().token;
+  parent = (await request('POST', '/auth/register', '', { username: 'OrangTua', password: '1234' })).json().token;
+  outsider = (await request('POST', '/auth/register', '', { username: 'KeluargaLain', password: 'kata-sandi-kuat' })).json().token;
   const created = (await request('POST', '/children', parent, { name: 'Adek' })).json();
   childId = created.child.id;
   child = (await request('POST', '/pair', '', { code: created.pairing.code })).json().token;
@@ -34,10 +34,14 @@ before(async () => {
 });
 after(async () => { if (database) await database.change(`DROP SCHEMA \"${schema}\" CASCADE`); await app.close(); await rm(root, { recursive: true, force: true }); });
 
-test('password authentication rejects wrong credentials and normalizes email', async () => {
-  assert.equal((await request('POST', '/auth/login', '', { email: 'parent@example.com', password: 'password-salah' })).statusCode, 401);
-  assert.equal((await request('POST', '/auth/login', '', { email: 'PARENT@example.com', password: 'kata-sandi-kuat' })).statusCode, 200);
-  assert.equal((await request('POST', '/auth/register', '', { email: 'parent@example.com', name: 'Duplikat', password: 'kata-sandi-kuat' })).statusCode, 409);
+test('username authentication accepts a four-character password and ignores username case', async () => {
+  assert.equal((await request('POST', '/auth/login', '', { username: 'OrangTua', password: '123' })).statusCode, 401);
+  const loggedIn = await request('POST', '/auth/login', '', { username: ' ORANGTUA ', password: '1234' });
+  assert.equal(loggedIn.statusCode, 200);
+  assert.equal(loggedIn.json().name, 'OrangTua');
+  assert.equal((await request('POST', '/auth/register', '', { username: 'orangtua', password: '1234' })).statusCode, 409);
+  assert.equal((await request('POST', '/auth/register', '', { username: 'Baru', password: '123' })).statusCode, 400);
+  assert.equal((await request('POST', '/auth/register', '', { username: 'baru@example.com', password: '1234' })).statusCode, 400);
 });
 test('dashboard and role boundaries require authentication', async () => {
   assert.equal((await request('GET', '/dashboard')).statusCode, 401);
@@ -182,11 +186,50 @@ test('server without AI key allows manual mode and rejects AI activation', async
   const manual = await createApp({ dataDir: dir });
   try {
     assert.equal((await manual.inject('/health')).json().aiAvailable, false);
-    const token = (await manual.inject({ method: 'POST', url: '/auth/register', payload: { email: 'a@example.com', name: 'Ayah', password: 'kata-sandi-kuat' } })).json().token;
+    const token = (await manual.inject({ method: 'POST', url: '/auth/register', payload: { username: 'Ayah', password: 'kata-sandi-kuat' } })).json().token;
     const headers = { authorization: `Bearer ${token}` };
     const id = (await manual.inject({ method: 'POST', url: '/children', headers, payload: { name: 'Anak' } })).json().child.id;
     assert.equal((await manual.inject({ method: 'PUT', url: `/children/${id}/policy`, headers, payload: { ...policy, mode: 'ai', aiConsent: true } })).statusCode, 400);
   } finally { await manual.close(); await rm(dir, { recursive: true, force: true }); }
+});
+test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent approval', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'jagabocil-provider-'));
+  let calls = 0;
+  const verify: Verify = async () => {
+    calls++;
+    return { isRecitation: true, matchesSurah: true, coverage: 1, confidence: 1, feedback: 'Teks cocok.' };
+  };
+  let family = await createApp({ dataDir: dir, verify });
+  try {
+    const registration = await family.inject({ method: 'POST', url: '/auth/register', payload: { username: 'Ayah', password: 'kata-sandi-kuat' } });
+    const parentHeaders = { authorization: `Bearer ${registration.json().token}` };
+    const created = await family.inject({ method: 'POST', url: '/children', headers: parentHeaders, payload: { name: 'Anak' } });
+    const paired = await family.inject({ method: 'POST', url: '/pair', payload: { code: created.json().pairing.code } });
+    const childHeaders = { authorization: `Bearer ${paired.json().token}` };
+    const policyUrl = `/children/${created.json().child.id}/policy`;
+    const optIn = () => family.inject({ method: 'PUT', url: policyUrl, headers: parentHeaders, payload: { ...policy, mode: 'ai', aiConsent: true } });
+    const data = multipart(wav(11));
+    const submit = () => family.inject({ method: 'POST', url: '/recitations', headers: { ...data.headers, ...childHeaders }, payload: data.payload });
+    assert.equal((await optIn()).statusCode, 200);
+    await family.close();
+    family = await createApp({ dataDir: dir, verify, aiProvider: 'deepseek' });
+    const dashboard = (await family.inject({ url: '/dashboard', headers: parentHeaders })).json();
+    assert.equal(dashboard.children[0].mode, 'manual');
+    assert.equal(dashboard.children[0].aiConsent, false);
+    assert.equal((await submit()).json().recitation.status, 'pending');
+    assert.equal(calls, 0);
+    assert.equal((await optIn()).statusCode, 200);
+    const rec = (await submit()).json().recitation;
+    assert.equal(calls, 1);
+    assert.equal(rec.status, 'pending');
+    assert.match(rec.feedback, /Teks cocok/);
+    const authorize = () => family.inject({ method: 'POST', url: '/tv/authorize', headers: childHeaders, payload: { recitationId: rec.id } });
+    assert.equal((await authorize()).statusCode, 403);
+    const review = await family.inject({ method: 'POST', url: `/recitations/${rec.id}/review`, headers: parentHeaders, payload: { decision: 'approve' } });
+    assert.equal(review.statusCode, 200);
+    assert.equal((await authorize()).statusCode, 200);
+    assert.equal((await authorize()).statusCode, 403);
+  } finally { await family.close(); await rm(dir, { recursive: true, force: true }); }
 });
 test('logout invalidates the session on the server', async () => {
   assert.equal((await request('POST', '/auth/logout', outsider)).statusCode, 200);
@@ -197,7 +240,7 @@ test('expired recordings cannot be reviewed or replayed and cleanup removes thei
   let clock = Date.now();
   let retentionApp = await createApp({ dataDir: dir, now: () => clock });
   try {
-    const token = (await retentionApp.inject({ method: 'POST', url: '/auth/register', payload: { email: 'r@example.com', name: 'Ayah', password: 'kata-sandi-kuat' } })).json().token;
+    const token = (await retentionApp.inject({ method: 'POST', url: '/auth/register', payload: { username: 'Ayah', password: 'kata-sandi-kuat' } })).json().token;
     const headers = { authorization: `Bearer ${token}` };
     const created = (await retentionApp.inject({ method: 'POST', url: '/children', headers, payload: { name: 'Anak' } })).json();
     const childToken = (await retentionApp.inject({ method: 'POST', url: '/pair', payload: { code: created.pairing.code } })).json().token;

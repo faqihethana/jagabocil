@@ -66,12 +66,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
     private suspend fun load() { val result = api.dashboard(); clockOffset = result.serverTime - System.currentTimeMillis(); dashboard = result }
     fun refresh() = action { load() }
-    fun authenticate(server: String, email: String, password: String, name: String, code: String, child: Boolean, register: Boolean) = action {
+    fun authenticate(server: String, username: String, password: String, code: String, child: Boolean, register: Boolean) = action {
         val uri = server.trim().toUri()
         require(uri.scheme == "https" || (BuildConfig.DEBUG && uri.scheme == "http" && uri.host in listOf("10.0.2.2", "localhost", "127.0.0.1"))) { "Gunakan alamat HTTPS. Emulator debug boleh memakai http://10.0.2.2:8787." }
         require(!uri.host.isNullOrBlank() && uri.userInfo == null && uri.query == null && uri.fragment == null) { "Alamat server belum sesuai." }
         api.baseUrl = server.trim().trimEnd('/'); api.token = ""
-        val body = if (child) api.body("code" to code.trim()) else if (register) api.body("email" to email.trim(), "password" to password, "name" to name.trim()) else api.body("email" to email.trim(), "password" to password)
+        val body = if (child) api.body("code" to code.trim()) else api.body("username" to username.trim(), "password" to password)
         val auth = api.json.decodeFromString<Auth>(api.request(if (child) "/pair" else if (register) "/auth/register" else "/auth/login", "POST", body))
         api.token = auth.token; store.save(auth.token, api.baseUrl); load(); screen = "home"
     }

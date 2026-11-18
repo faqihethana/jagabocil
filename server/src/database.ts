@@ -28,12 +28,14 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
+const schemaVersion = 2;
+
 export const migration = (schema: string) => {
   const s = schemaName(schema);
   return [
     `CREATE SCHEMA IF NOT EXISTS ${s}`,
     `CREATE TABLE IF NOT EXISTS ${s}.schema_migrations(version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
-    `CREATE TABLE IF NOT EXISTS ${s}.parents(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS ${s}.parents(id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS ${s}.children(id TEXT PRIMARY KEY,parent_id TEXT NOT NULL REFERENCES ${s}.parents(id),name TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'manual',surah_id TEXT NOT NULL DEFAULT '112',min_seconds INTEGER NOT NULL DEFAULT 15,
       unlock_minutes INTEGER NOT NULL DEFAULT 15,tv_brand TEXT NOT NULL DEFAULT 'none',ai_consent INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +51,18 @@ export const migration = (schema: string) => {
     `CREATE INDEX IF NOT EXISTS tokens_expiry ON ${s}.tokens(expires)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS children_pair ON ${s}.children(pair_hash) WHERE pair_hash IS NOT NULL`,
     `INSERT INTO ${s}.schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING`,
+    `DO $migration$
+    BEGIN
+      LOCK TABLE ${s}.parents IN ACCESS EXCLUSIVE MODE;
+      IF EXISTS (
+        SELECT FROM information_schema.columns
+        WHERE table_schema='${schema}' AND table_name='parents' AND column_name='email'
+      ) THEN
+        ALTER TABLE ${s}.parents RENAME COLUMN email TO username;
+      END IF;
+      INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
   ];
 };
 
@@ -81,7 +95,9 @@ export async function postgresDatabase(url: string, schema = 'jagabocil', migrat
   }
   try {
     if (migrate) for (const statement of migration(schema)) await query(statement);
-    else await query(`SELECT version FROM ${schemaName(schema)}.schema_migrations WHERE version=1`);
+    else if (!(await query(`SELECT version FROM ${schemaName(schema)}.schema_migrations WHERE version=${schemaVersion}`)).rows.length) {
+      throw Error('JagaBocil PostgreSQL schema needs migration. Run npm run db:migrate.');
+    }
   } catch (error) { await pool?.end(); throw error; }
   return {
     kind: 'postgres',

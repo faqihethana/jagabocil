@@ -9,7 +9,7 @@ export const verdictSchema = z.object({
   feedback: z.string().max(300),
 });
 export type Verdict = z.infer<typeof verdictSchema>;
-export type Verify = (audio: Buffer, mediaType: string, surahId: string) => Promise<Verdict>;
+export type Verify = (audio: Buffer, mediaType: string, surahId: string, duration: number) => Promise<Verdict>;
 export function createVerifier(key: string, model: string, fetch?: typeof globalThis.fetch): Verify {
   const google = createGoogleGenerativeAI({ apiKey: key, fetch });
   return async (audio, mediaType, surahId) => {
