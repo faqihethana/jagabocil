@@ -50,7 +50,7 @@ npm run db:migrate
 node --use-env-proxy --env-file=.env.production.local dist/migrate.js
 ```
 
-Jalankan migrasi versi 2 sebelum memulai backend dengan login username. Migrasi mengubah nama kolom pengenal akun dan mempertahankan akun, profil, serta sesi yang sudah ada. Runtime normal memeriksa versi schema. `DATABASE_AUTO_MIGRATE=true` tersedia untuk setup yang sengaja menjalankan migrasi saat startup. Pada host yang menyuntikkan environment, jalankan `node --use-env-proxy dist/migrate.js` untuk migrasi dan `node --use-env-proxy dist/index.js` untuk API. Dockerfile memakai flag yang sama.
+Jalankan migrasi versi 3 sebelum memulai backend dengan kode pemulihan dan notifikasi. Migrasi versi 2 mengubah nama kolom pengenal akun. Migrasi versi 3 menambahkan hash pemulihan, revisi sesi orang tua, serta waktu rekaman siap dan direview. Akun, profil, dan sesi lama tetap bisa digunakan. Runtime normal memeriksa versi schema. `DATABASE_AUTO_MIGRATE=true` tersedia untuk setup yang sengaja menjalankan migrasi saat startup. Pada host yang menyuntikkan environment, jalankan `node --use-env-proxy dist/migrate.js` untuk migrasi dan `node --use-env-proxy dist/index.js` untuk API. Dockerfile memakai flag yang sama.
 
 Neon menggunakan driver HTTP melalui HTTPS; Postgres biasa/lokal memakai pool `pg`. Semua tabel aplikasi diberi nama schema secara eksplisit, sehingga tidak bergantung pada `search_path` dari koneksi pool. Pairing dikonsumsi atomik, izin power tetap satu SQL update, dan perubahan aturan/pencabutan perangkat memakai transaksi.
 

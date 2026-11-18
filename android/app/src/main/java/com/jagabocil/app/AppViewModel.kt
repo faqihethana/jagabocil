@@ -11,6 +11,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -27,6 +28,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val wifiTv = WifiTv(application)
     val tvRemote = TvWifiRemote(application, wifiTv)
     private val tvDiscovery = TvDiscovery(application, wifiTv)
+    private val notifications = ReviewNotifications(application)
+    var notificationsEnabled by mutableStateOf(notifications.enabled); private set
+    var recoveryCode by mutableStateOf<String?>(null); private set
     var tvPairCodeNeeded by mutableStateOf(false); private set
     private var foreground = true
     private val recorder = AudioRecorder(application)
@@ -48,38 +52,92 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         application.cacheDir.listFiles()?.filter { it.name.startsWith("ngaji-") || it.name.startsWith("listen-") }?.forEach { it.delete() }
-        if (loggedIn) refresh()
+        if (loggedIn) {
+            notifications.schedule()
+            refresh()
+        }
     }
-    private fun action(work: suspend () -> Unit) {
+    private fun action(onError: ((String) -> Unit)? = null, work: suspend () -> Unit) {
         if (busy) return
         busy = true
         viewModelScope.launch {
             try { work() }
             catch (e: Exception) {
-                if (e is ApiError && e.status == 401) { store.clear(); api.token = ""; dashboard = null; tvRemote.clear(); tvPairCodeNeeded = false }
-                message = when (e) {
-                    is ApiError -> e.message
+                if (e is CancellationException) throw e
+                if (e is ApiError && e.status == 401 && loggedIn) clearSession()
+                val error = when (e) {
+                    is ApiError -> e.message ?: "Ada kendala. Coba lagi, ya."
                     is java.io.IOException -> "Server belum bisa dihubungi. Periksa alamat server dan koneksi internet."
                     else -> e.message ?: "Ada kendala. Coba lagi, ya."
                 }
+                if (onError == null) message = error else onError(error)
             } finally { busy = false }
         }
     }
-    private suspend fun load() { val result = api.dashboard(); clockOffset = result.serverTime - System.currentTimeMillis(); dashboard = result }
-    fun refresh() = action { load() }
-    fun authenticate(server: String, username: String, password: String, code: String, child: Boolean, register: Boolean) = action {
+    private fun clearSession() {
+        store.clear()
+        api.token = ""
+        dashboard = null
+        recoveryCode = null
+        tvRemote.clear()
+        tvPairCodeNeeded = false
+        notifications.clearSession()
+    }
+    private suspend fun load() {
+        val server = api.baseUrl
+        val token = api.token
+        val result = api.dashboard()
+        clockOffset = result.serverTime - System.currentTimeMillis()
+        dashboard = result
+        if (notificationsEnabled) withContext(Dispatchers.IO) { notifications.observe(result, server, token) }
+    }
+    fun refresh() { if (foreground && loggedIn) action { load() } }
+    private fun serverAddress(server: String): String {
         val uri = server.trim().toUri()
         require(uri.scheme == "https" || (BuildConfig.DEBUG && uri.scheme == "http" && uri.host in listOf("10.0.2.2", "localhost", "127.0.0.1"))) { "Gunakan alamat HTTPS. Emulator debug boleh memakai http://10.0.2.2:8787." }
         require(!uri.host.isNullOrBlank() && uri.userInfo == null && uri.query == null && uri.fragment == null) { "Alamat server belum sesuai." }
-        api.baseUrl = server.trim().trimEnd('/'); api.token = ""
+        return server.trim().trimEnd('/')
+    }
+    fun authenticate(server: String, username: String, password: String, code: String, child: Boolean, register: Boolean) = action {
+        api.baseUrl = serverAddress(server); api.token = ""
         val body = if (child) api.body("code" to code.trim()) else api.body("username" to username.trim(), "password" to password)
         val auth = api.json.decodeFromString<Auth>(api.request(if (child) "/pair" else if (register) "/auth/register" else "/auth/login", "POST", body))
         api.token = auth.token; store.save(auth.token, api.baseUrl); load(); screen = "home"
+        notifications.schedule()
+    }
+    fun setNotifications(enabled: Boolean) {
+        if (!enabled) {
+            notifications.disable()
+            notificationsEnabled = false
+            return
+        }
+        val data = dashboard ?: return
+        if (!notifications.permitted()) {
+            message = "Izinkan notifikasi JagaBocil di pengaturan Android."
+            return
+        }
+        notifications.enable(data, api.baseUrl, api.token)
+        notificationsEnabled = true
+    }
+    fun createRecoveryCode(password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
+        recoveryCode = api.json.decodeFromString<RecoveryCode>(
+            api.request("/auth/recovery-code", "POST", api.body("password" to password))
+        ).code
+        dashboard = dashboard?.copy(recoveryConfigured = true)
+        onComplete()
+    }
+    fun dismissRecoveryCode() { recoveryCode = null }
+    fun recover(server: String, username: String, code: String, password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
+        val recoveryApi = Api(serverAddress(server))
+        recoveryApi.request("/auth/recover", "POST",
+            recoveryApi.body("username" to username, "code" to code, "password" to password))
+        onComplete()
+        message = "Kata sandi sudah diganti. Silakan masuk dengan kata sandi baru."
     }
     fun logout() = action {
-        stopPlayback(); discardRecording(); tvRemote.clear(); tvPairCodeNeeded = false
+        stopPlayback(); discardRecording()
         runCatching { api.request("/auth/logout", "POST") }
-        api.token = ""; store.clear(); dashboard = null; screen = "home"
+        clearSession(); screen = "home"
     }
     fun addChild(name: String) = action {
         val result = api.json.decodeFromString<CreatedChild>(api.request("/children", "POST", api.body("name" to name)))
@@ -115,7 +173,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         try { recordedFile = recorder.stop() } catch (_: Exception) { recordedFile = null; message = "Rekaman terlalu singkat atau terputus. Yuk, ulangi." }
     }
     fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; seconds = 0 }
-    fun foregrounded() { foreground = true }
+    fun foregrounded() {
+        val wasActive = foreground
+        foreground = true
+        if (!wasActive) refresh()
+    }
     fun backgrounded() { foreground = false; cancelTvPair(); if (recording) { discardRecording(); message = "Rekaman dihentikan saat aplikasi ditutup. Silakan rekam ulang." }; stopPlayback() }
     fun cancelTvPair() { tvRemote.cancelPair(); tvPairCodeNeeded = false }
     internal suspend fun discoverTvs() = tvDiscovery.find()

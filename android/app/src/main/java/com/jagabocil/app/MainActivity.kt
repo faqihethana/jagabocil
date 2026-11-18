@@ -132,6 +132,7 @@ class MainActivity : ComponentActivity() {
         }, confirmButton = { TextButton(onClick = { vm.finishTvPair(code) }, enabled = code.length == 6 && !vm.busy) { Text("Hubungkan") } },
             dismissButton = { TextButton(onClick = vm::cancelTvPair) { Text("Batal") } })
     }
+    vm.recoveryCode?.let { RecoveryCodeDialog(it, vm::dismissRecoveryCode) }
     vm.pairing?.let { code ->
         var now by remember { mutableLongStateOf(vm.serverNow()) }
         LaunchedEffect(code) { while (now < code.expiresAt) { delay(1000); now = vm.serverNow() } }
@@ -162,6 +163,7 @@ class MainActivity : ComponentActivity() {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
+    var recovering by remember { mutableStateOf(false) }
     val canSubmit = when {
         child -> code.length == 6
         register -> UsernamePattern.matches(username.trim()) && password.length in 4..128
@@ -202,9 +204,15 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.width(10.dp)); Icon(Icons.Outlined.East, null, Modifier.size(18.dp))
             }
             if (!child) TextButton(onClick = { register = !register }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (register) "Sudah punya akun? Masuk" else "Belum punya akun? Daftar") }
+            if (!child && !register) TextButton(onClick = { recovering = true }, enabled = !vm.busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Lupa kata sandi?") }
         }
         Text("Rekaman hanya tersedia untuk keluargamu. Mode AI perlu persetujuan orang tua.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
     }
+    if (recovering) RecoverAccountDialog(vm, server, username, onDismiss = { recovering = false }, onRecovered = { recovered ->
+        username = recovered
+        password = ""
+        recovering = false
+    })
 }
 
 @Composable private fun Header(vm: AppViewModel, data: Dashboard) {
@@ -396,6 +404,8 @@ class MainActivity : ComponentActivity() {
     Text("Atur bacaan, metode pemeriksaan, dan profil TV untuk masing-masing anak.", color = Muted)
     data.children.forEach { ChildCard(vm, data, it) }
     AddChild(vm)
+    NotificationSetting(vm, parent = true)
+    RecoverySetting(vm, data.recoveryConfigured)
     Text("Kode penghubung hanya untuk HP anak. Jangan bagikan kata sandi akun orang tua.", fontSize = 12.sp, color = Muted)
 }
 
@@ -575,6 +585,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Guide(vm: AppViewModel) {
     Text("Ngaji jadi kebiasaan", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+    NotificationSetting(vm, parent = false)
     EmptyCard("01 · Baca dan rekam", "Baca semua ayat dengan tenang. Mikrofon hanya aktif saat kamu menekan mulai merekam.")
     EmptyCard("02 · Tunggu diperiksa", "Orang tua mendengar rekamanmu. Jika memakai AI, bacaan yang meragukan tetap diperiksa orang tua.")
     EmptyCard("03 · Arahkan, lalu power", "Setelah disetujui, gunakan infrared atau kirim permintaan nyalakan melalui Wi-Fi sesuai pengaturan orang tua. Satu bacaan membuka satu kali tombol.")

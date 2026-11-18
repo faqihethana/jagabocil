@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 2;
+const schemaVersion = 3;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -60,6 +60,16 @@ export const migration = (schema: string) => {
       ) THEN
         ALTER TABLE ${s}.parents RENAME COLUMN email TO username;
       END IF;
+      INSERT INTO ${s}.schema_migrations(version) VALUES(2) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      ALTER TABLE ${s}.parents ADD COLUMN IF NOT EXISTS recovery_hash TEXT;
+      ALTER TABLE ${s}.parents ADD COLUMN IF NOT EXISTS auth_revision INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE ${s}.tokens ADD COLUMN IF NOT EXISTS auth_revision INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS ready_at BIGINT;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS reviewed_at BIGINT;
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

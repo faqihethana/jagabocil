@@ -21,9 +21,9 @@ function isPrivateIpv4(host: string) {
   const [a, b, c, d] = host.split('.').map(Number);
   return [a,b,c,d].every(x => x !== undefined && x <= 255) && (a === 10 || a === 192 && b === 168 || a === 172 && b! >= 16 && b! <= 31);
 }
-type Actor = { role: 'parent' | 'child'; id: string };
+type Actor = { role: 'parent' | 'child'; id: string; authRevision: number };
 type Child = { id: string; parent_id: string; name: string; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
-type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
+type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
 // The original consent value (1) covered Gemini. DeepSeek requires a fresh opt-in.
 const aiConsentByProvider = { gemini: 1, deepseek: 2 } as const;
 type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; verify?: Verify; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number };
@@ -61,17 +61,26 @@ export async function createApp(options: Options) {
   app.addHook('onSend', async (_req, reply) => { reply.header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff'); });
   async function actor(req: FastifyRequest, required?: Actor['role']): Promise<Actor> {
     const raw = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
-    const token = raw ? (await one<{ role: Actor['role']; subject_id: string }>('SELECT * FROM tokens WHERE hash=? AND expires>?', digest(raw), now())) : undefined;
+    const token = raw ? await one<{ role: Actor['role']; subject_id: string; auth_revision: number }>(
+      `SELECT t.role,t.subject_id,t.auth_revision FROM tokens t WHERE t.hash=? AND t.expires>?
+       AND (t.role='child' OR EXISTS(SELECT 1 FROM parents p WHERE p.id=t.subject_id AND p.auth_revision=t.auth_revision))`,
+      digest(raw), now(),
+    ) : undefined;
     if (!token) return fail(401, 'Sesi habis. Silakan masuk lagi.');
     if (required && token.role !== required) return fail(403, 'Hanya orang tua yang dapat mengubah ini.');
-    return { role: token.role, id: token.subject_id };
+    return { role: token.role, id: token.subject_id, authRevision: token.auth_revision };
   }
-  async function newToken(role: Actor['role'], id: string, revision?: number) {
+  async function newToken(role: Actor['role'], id: string, revision: number) {
     const token = randomBytes(32).toString('base64url');
+    const expiration = now() + 30 * day;
     if (role === 'child') {
-      const inserted = await change('INSERT INTO tokens SELECT ?,?,?,? FROM children WHERE id=? AND revision=?', digest(token), role, id, now() + 30 * day, id, revision!);
+      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires) SELECT ?,?,?,? FROM children WHERE id=? AND revision=?', digest(token), role, id, expiration, id, revision);
       if (!inserted.changes) return fail(409, 'Perangkat dicabut saat pairing. Minta kode baru ke orang tua.');
-    } else await change('INSERT INTO tokens VALUES(?,?,?,?)', digest(token), role, id, now() + 30 * day);
+    } else {
+      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,auth_revision FROM parents WHERE id=? AND auth_revision=?',
+        digest(token), role, id, expiration, id, revision);
+      if (!inserted.changes) return fail(409, 'Kata sandi baru saja berubah. Silakan masuk lagi.');
+    }
     return token;
   }
   async function childFor(a: Actor, id: string) {
@@ -87,7 +96,7 @@ export async function createApp(options: Options) {
   }
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
   const publicChild = (c: Child) => ({ id: c.id, name: c.name, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, aiConsent: hasAiConsent(c) });
-  const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer });
+  const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer });
   async function pairing(id: string) {
     let code: string;
     do { code = String(randomInt(100_000, 1_000_000)); } while ((await one('SELECT id FROM children WHERE pair_hash=?', digest(code))));
@@ -111,9 +120,10 @@ export async function createApp(options: Options) {
 
   app.get('/health', async () => ({ ok: true, aiAvailable: aiProvider !== null, aiProvider, database: db.kind, audioStore: recordings.kind, surahs }));
   const credentials = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(128) });
+  const newPassword = z.string().min(4).max(128);
   const registration = credentials.extend({
     username: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/),
-    password: z.string().min(4).max(128),
+    password: newPassword,
   });
   app.post('/auth/register', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (req, reply) => {
     const data = registration.parse(req.body);
@@ -121,15 +131,39 @@ export async function createApp(options: Options) {
     const id = randomUUID();
     try { await change('INSERT INTO parents(id,username,name,password) VALUES(?,?,?,?)', id, data.username.toLowerCase(), data.username, hashed); }
     catch (e) { if ((e as Error).message.includes('UNIQUE')) return fail(409, 'Username sudah terdaftar. Silakan masuk.'); throw e; }
-    return reply.code(201).send({ token: (await newToken('parent', id)), role: 'parent', name: data.username });
+    return reply.code(201).send({ token: (await newToken('parent', id, 0)), role: 'parent', name: data.username });
   });
   app.post('/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async req => {
     const data = credentials.parse(req.body);
-    const p = (await one<{ id: string; name: string; password: string }>('SELECT id,name,password FROM parents WHERE username=?', data.username.toLowerCase()));
+    const p = await one<{ id: string; name: string; password: string; auth_revision: number }>(
+      'SELECT id,name,password,auth_revision FROM parents WHERE username=?', data.username.toLowerCase(),
+    );
     // Run scrypt for unknown accounts too.
     const valid = p ? await passwordMatches(data.password, p.password) : (await passwordHash(data.password), false);
     if (!p || !valid) return fail(401, 'Username atau kata sandi kurang tepat.');
-    return { token: (await newToken('parent', p.id)), role: 'parent', name: p.name };
+    return { token: (await newToken('parent', p.id, p.auth_revision)), role: 'parent', name: p.name };
+  });
+  app.post('/auth/recovery-code', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async req => {
+    const a = await actor(req, 'parent');
+    const { password } = credentials.pick({ password: true }).parse(req.body);
+    const p = await one<{ password: string }>('SELECT password FROM parents WHERE id=? AND auth_revision=?', a.id, a.authRevision);
+    if (!p || !await passwordMatches(password, p.password)) return fail(403, 'Kata sandi tidak cocok.');
+    const code = randomBytes(16).toString('hex').toUpperCase();
+    const issued = await change('UPDATE parents SET recovery_hash=? WHERE id=? AND auth_revision=?', digest(code), a.id, a.authRevision);
+    if (!issued.changes) return fail(409, 'Kata sandi baru saja berubah. Silakan masuk lagi.');
+    return { code: code.match(/.{8}/g)!.join('-') };
+  });
+  app.post('/auth/recover', { config: { rateLimit: { max: 10, timeWindow: '30 minutes' } } }, async req => {
+    const { username, code, password } = credentials.extend({
+      code: z.string().max(64).transform(s => s.replace(/[\s-]/g, '').toUpperCase()).pipe(z.string().regex(/^[0-9A-F]{32}$/)),
+      password: newPassword,
+    }).parse(req.body);
+    const changed = await change(
+      'UPDATE parents SET password=?,recovery_hash=NULL,auth_revision=auth_revision+1 WHERE username=? AND recovery_hash=?',
+      await passwordHash(password), username.toLowerCase(), digest(code),
+    );
+    if (!changed.changes) return fail(401, 'Username atau kode pemulihan tidak cocok.');
+    return { ok: true };
   });
   app.post('/auth/logout', async req => {
     await actor(req);
@@ -156,7 +190,7 @@ export async function createApp(options: Options) {
     await db.batch([
       { sql: 'DELETE FROM tokens WHERE subject_id=?', values: [c.id] },
       { sql: 'UPDATE children SET pair_hash=NULL,pair_expires=NULL,revision=revision+1 WHERE id=?', values: [c.id] },
-      { sql: "UPDATE recitations SET status='rejected',feedback='Izin dicabut orang tua.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
+      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Izin dicabut orang tua.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
     ]);
     return { ok: true };
   });
@@ -169,7 +203,7 @@ export async function createApp(options: Options) {
     const consent = p.mode === 'ai' && aiProvider ? aiConsentByProvider[aiProvider] : 0;
     await db.batch([
       { sql: 'UPDATE children SET mode=?,surah_id=?,min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,revision=revision+1 WHERE id=?', values: [p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, consent, p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, c.id] },
-      { sql: "UPDATE recitations SET status='rejected',feedback='Aturan diperbarui. Yuk, rekam ngaji lagi.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
+      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Aturan diperbarui. Yuk, rekam ngaji lagi.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
     ]);
     return { child: publicChild((await childFor(a, c.id))) };
   });
@@ -179,8 +213,8 @@ export async function createApp(options: Options) {
     const recs = a.role === 'parent'
       ? (await all<Recitation>("SELECT r.* FROM recitations r JOIN children c ON c.id=r.child_id WHERE c.parent_id=? AND r.status NOT IN ('uploading','failed','deleting') ORDER BY r.created_at DESC LIMIT 100", a.id))
       : (await all<Recitation>("SELECT * FROM recitations WHERE child_id=? AND status NOT IN ('uploading','failed','deleting') ORDER BY created_at DESC LIMIT 50", a.id));
-    const name = a.role === 'parent' ? (await one<{ name: string }>('SELECT name FROM parents WHERE id=?', a.id))!.name : children[0]!.name;
-    return { role: a.role, name, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, serverTime: now() };
+    const parent = a.role === 'parent' ? await one<{ name: string; recovery_hash: string | null }>('SELECT name,recovery_hash FROM parents WHERE id=?', a.id) : undefined;
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, serverTime: now() };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));
@@ -214,7 +248,7 @@ export async function createApp(options: Options) {
       app.log.error({ err: error }, 'Recording storage failed');
       return fail(503, 'Rekaman belum tersimpan. Coba kirim lagi sebentar.');
     }
-    const ready = (await change("UPDATE recitations SET status='pending' WHERE id=? AND status='uploading' AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=?)", id, c.id, c.revision));
+    const ready = await change("UPDATE recitations SET status='pending',ready_at=? WHERE id=? AND status='uploading' AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=?)", now(), id, c.id, c.revision);
     if (!ready.changes) {
       await recordings.remove(reference);
       await change('DELETE FROM recitations WHERE id=?', id);
@@ -224,7 +258,8 @@ export async function createApp(options: Options) {
       try {
         const verdict = verdictSchema.parse(await options.verify(buffer, mime, surahId, duration));
         const approved = aiProvider === 'gemini' && passes(verdict);
-        await change("UPDATE recitations SET status=?,expires_at=?,feedback=?,reviewer='ai' WHERE id=? AND status='pending' AND reviewer IS NULL", approved ? 'approved' : 'pending', approved ? now() + c.unlock_minutes * 60_000 : null, approved ? verdict.feedback : `Perlu pemeriksaan orang tua. ${verdict.feedback}`, id);
+        const reviewTime = approved ? now() : null;
+        await change("UPDATE recitations SET status=?,expires_at=?,feedback=?,reviewer='ai',reviewed_at=? WHERE id=? AND status='pending' AND reviewer IS NULL", approved ? 'approved' : 'pending', reviewTime === null ? null : reviewTime + c.unlock_minutes * 60_000, approved ? verdict.feedback : `Perlu pemeriksaan orang tua. ${verdict.feedback}`, reviewTime, id);
       } catch {
         await change("UPDATE recitations SET feedback='AI belum bisa memeriksa. Rekaman diteruskan ke orang tua.' WHERE id=? AND status='pending' AND reviewer IS NULL", id);
       }
@@ -242,7 +277,8 @@ export async function createApp(options: Options) {
     const { decision } = z.object({ decision: z.enum(['approve', 'reject']) }).parse(req.body);
     const approved = decision === 'approve';
     if (r.created_at < now() - 7 * day) return fail(410, 'Rekaman sudah kedaluwarsa.');
-    const updated = (await change("UPDATE recitations SET status=?,expires_at=?,reviewer='parent',feedback=? WHERE id=? AND status='pending' AND used_at IS NULL", approved ? 'approved' : 'rejected', approved ? now() + c.unlock_minutes * 60_000 : null, approved ? 'Disetujui orang tua. Terima kasih sudah mengaji!' : 'Yuk, coba mengaji lagi. Orang tua ingin mendengar lebih jelas.', r.id));
+    const reviewTime = now();
+    const updated = await change("UPDATE recitations SET status=?,expires_at=?,reviewer='parent',feedback=?,reviewed_at=? WHERE id=? AND status='pending' AND used_at IS NULL", approved ? 'approved' : 'rejected', approved ? reviewTime + c.unlock_minutes * 60_000 : null, approved ? 'Disetujui orang tua. Terima kasih sudah mengaji!' : 'Yuk, coba mengaji lagi. Orang tua ingin mendengar lebih jelas.', reviewTime, r.id);
     if (!updated.changes) return fail(409, 'Rekaman ini sudah diperiksa.');
     return { recitation: publicRec((await one<Recitation>('SELECT * FROM recitations WHERE id=?', r.id))!) };
   });

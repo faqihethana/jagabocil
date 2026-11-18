@@ -9,6 +9,8 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 - Daftar dan masuk dengan username dan kata sandi. Username 3–32 karakter, kata sandi minimal 4 karakter. Profil anak dihubungkan melalui kode enam angka, sekali pakai, kedaluwarsa 10 menit.
 - Tugas surah Al-Ikhlas, Al-Falaq, atau An-Nas; teks Arab, perekam mikrofon, pratinjau audio, dan unggah M4A.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
+- Notifikasi Android untuk rekaman baru dan hasil review. Aktifkan di **Keluarga** pada HP orang tua dan di **Panduan** pada HP anak. Aplikasi memeriksa saat dibuka dan memakai pekerjaan berkala saat di latar belakang. Android menjadwalkan pekerjaan tersebut dengan interval minimal 15 menit dan bisa menundanya.
+- Kode pemulihan sekali pakai tanpa email. Orang tua membuat kode di **Keluarga → Pemulihan akun** dengan kata sandi saat ini. Simpan kode saat ditampilkan. Untuk menggunakannya, pilih **Lupa kata sandi?** di layar masuk. Setelah berhasil, sesi lama akun orang tua berakhir dan perangkat anak tetap terhubung.
 - **AI opsional:** DeepSeek mencocokkan teks hasil transkripsi dengan surah tugas. Orang tua tetap mendengar rekaman dan memutuskan. Jika server memakai Gemini, bacaan yang dikenali lengkap dengan confidence dan coverage ≥95% bisa disetujui otomatis. Orang tua perlu menyetujui pengiriman audio ke penyedia yang aktif.
 - Izin server berlaku 1–60 menit setelah disetujui dan dikonsumsi atomik sekali saja. Mengganti aturan, mencabut perangkat, atau menghapus rekaman membatalkan izin yang belum dipakai.
 - Dua metode koneksi: **infrared** Samsung/LG 38 kHz atau **Wi-Fi lokal**. Pilihan platform Wi-Fi: Android TV/Google TV (Remote Service v2), Samsung Tizen (WSS), LG webOS (SSAP/WSS), dan Wake-on-LAN. Driver jaringan masih perlu pengujian pada TV fisik; lihat [matriks kompatibilitas](docs/tv-compatibility.md).
@@ -73,13 +75,15 @@ APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 
 5. Anak merekam surah sesuai tugas. Orang tua memutar salinannya di antrean, lalu memilih **Setujui** atau **Ulangi**. Mode AI dapat diaktifkan pada aturan anak jika server sudah dikonfigurasi dan orang tua menyetujui pengiriman audio.
 6. Untuk infrared, arahkan IR blaster HP anak ke TV. Untuk Wi-Fi, pilih platform/IP/MAC pada aturan anak, lalu gunakan **Hubungkan TV** di HP anak saat TV menyala (kecuali mode Wake-on-LAN yang tidak memakai pairing). Setelah bacaan disetujui, tombol mengirim satu permintaan power melalui metode yang dipilih.
 
-HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Pemulihan kata sandi, notifikasi push, dan distribusi Play Store belum tersedia.
+HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Distribusi Play Store belum tersedia.
 
 Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka pakai ke kolom Username. Nama tampilan dan kata sandi akun lama tetap bisa digunakan.
 
 ## Privasi dan akses
 
 Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di server, berlaku 30 hari, dan dienkripsi dengan Android Keystore di HP. API audio memerlukan autentikasi dan pemeriksaan kepemilikan keluarga. S3 hanya menggunakan prefix `jagabocil/`, enkripsi SSE-S3, dan respons audio melalui API keluarga; tidak ada URL publik rekaman. Saat startup mode S3, server memakai probe tanpa data anak pada prefix rekaman untuk memeriksa penolakan akses anonim sebelum menerima upload. Upload dibatasi 10 MB, 180 detik, serta format M4A/WAV; durasi diperiksa dari berkas oleh ffprobe, bukan dari klaim HP.
+
+Kode pemulihan memiliki entropi 128 bit, disimpan sebagai hash, dan dikonsumsi atomik saat dipakai. Membuat kode baru membatalkan kode sebelumnya. Pemberitahuan Android hanya menyertakan status umum tanpa nama anak atau isi rekaman.
 
 Audio dan riwayat otomatis dihapus setelah 7 hari, melalui cleanup saat startup dan setiap jam. Jika penghapusan S3 gagal, metadata dipertahankan agar cleanup dapat mencoba ulang; rekaman yang sedang dihapus langsung diblokir dari playback dan izin power. Orang tua dapat menghapus lebih awal di riwayat. Cache audio HP dibersihkan setelah dipakai, logout, atau startup berikutnya; rekaman terputus saat aplikasi masuk background dibatalkan. Backup host, disk encryption, dan kebijakan penyedia AI mengikuti konfigurasi operator server. Jangan mengaktifkan AI tanpa memahami pemrosesan audio anak oleh penyedia.
 

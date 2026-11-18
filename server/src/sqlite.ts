@@ -21,6 +21,13 @@ export function sqliteDatabase(path: string): Database {
   try {
     const accountColumns = db.prepare('PRAGMA table_info(parents)').all();
     if (accountColumns.some(column => column.name === 'email')) db.exec('ALTER TABLE parents RENAME COLUMN email TO username');
+    if (!accountColumns.some(column => column.name === 'recovery_hash')) db.exec('ALTER TABLE parents ADD COLUMN recovery_hash TEXT');
+    if (!accountColumns.some(column => column.name === 'auth_revision')) db.exec('ALTER TABLE parents ADD COLUMN auth_revision INTEGER NOT NULL DEFAULT 0');
+    const tokenColumns = db.prepare('PRAGMA table_info(tokens)').all();
+    if (!tokenColumns.some(column => column.name === 'auth_revision')) db.exec('ALTER TABLE tokens ADD COLUMN auth_revision INTEGER NOT NULL DEFAULT 0');
+    const recordingColumns = new Set(db.prepare('PRAGMA table_info(recitations)').all().map(column => column.name));
+    if (!recordingColumns.has('ready_at')) db.exec('ALTER TABLE recitations ADD COLUMN ready_at INTEGER');
+    if (!recordingColumns.has('reviewed_at')) db.exec('ALTER TABLE recitations ADD COLUMN reviewed_at INTEGER');
     const columns = new Set(db.prepare('PRAGMA table_info(children)').all().map(column => column.name));
     if (!columns.has('tv_transport')) db.exec("ALTER TABLE children ADD COLUMN tv_transport TEXT NOT NULL DEFAULT 'infrared'");
     if (!columns.has('tv_mac')) db.exec("ALTER TABLE children ADD COLUMN tv_mac TEXT NOT NULL DEFAULT ''");

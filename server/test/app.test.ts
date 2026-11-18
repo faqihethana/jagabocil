@@ -58,6 +58,8 @@ test('manual upload stays pending and is visible only to its family', async () =
   const response = await upload(); assert.equal(response.statusCode, 201);
   const rec = response.json().recitation; recId = rec.id;
   assert.equal(rec.status, 'pending'); assert.ok(rec.duration >= 10);
+  assert.equal(rec.readyAt, now);
+  assert.equal(rec.reviewedAt, null);
   assert.equal((await request('GET', `/recitations/${recId}/audio`, outsider)).statusCode, 404);
   assert.equal((await request('GET', `/recitations/${recId}/audio`, parent)).statusCode, 200);
   assert.equal((await request('GET', `/recitations/${recId}/audio`)).statusCode, 401);
@@ -69,7 +71,10 @@ test('no power permission before approval; child and outsiders cannot approve', 
   assert.equal((await request('POST', `/recitations/${recId}/review`, outsider, { decision: 'approve' })).statusCode, 404);
 });
 test('parent approval enables exactly one authorization, even with concurrent requests', async () => {
-  assert.equal((await request('POST', `/recitations/${recId}/review`, parent, { decision: 'approve' })).statusCode, 200);
+  const decision = await request('POST', `/recitations/${recId}/review`, parent, { decision: 'approve' });
+  assert.equal(decision.statusCode, 200);
+  assert.equal(decision.json().recitation.reviewedAt, now);
+  assert.equal((await request('GET', '/dashboard', child)).json().recitations[0].reviewedAt, now);
   assert.equal((await request('POST', `/recitations/${recId}/review`, parent, { decision: 'approve' })).statusCode, 409);
   const results = await Promise.all([request('POST', '/tv/authorize', child, { recitationId: recId }), request('POST', '/tv/authorize', child, { recitationId: recId })]);
   assert.deepEqual(results.map(r => r.statusCode).sort(), [200, 403]);
@@ -234,6 +239,40 @@ test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent app
 test('logout invalidates the session on the server', async () => {
   assert.equal((await request('POST', '/auth/logout', outsider)).statusCode, 200);
   assert.equal((await request('GET', '/dashboard', outsider)).statusCode, 401);
+});
+test('recovery requires the current password to issue and atomically invalidates the code and parent sessions', async () => {
+  const username = 'Pemulihan';
+  const password = 'lama';
+  const registration = await request('POST', '/auth/register', '', { username, password });
+  assert.equal(registration.statusCode, 201);
+  const session = registration.json().token;
+  const secondSession = (await request('POST', '/auth/login', '', { username, password })).json().token;
+  const profile = (await request('POST', '/children', session, { name: 'Anak' })).json();
+  const childSession = (await request('POST', '/pair', '', { code: profile.pairing.code })).json().token;
+  assert.equal((await request('POST', '/auth/recovery-code', childSession, { password })).statusCode, 403);
+  assert.equal((await request('POST', '/auth/recovery-code', session, { password: 'salah' })).statusCode, 403);
+  const issue = () => request('POST', '/auth/recovery-code', session, { password });
+  const first = (await issue()).json().code;
+  const current = (await issue()).json().code;
+  assert.match(current, /^[0-9A-F]{8}(?:-[0-9A-F]{8}){3}$/);
+  assert.notEqual(first, current);
+  const dashboard = (await request('GET', '/dashboard', session)).json();
+  assert.equal(dashboard.recoveryConfigured, true);
+  assert.equal(JSON.stringify(dashboard).includes(current), false);
+
+  const recover = (code: string) => request('POST', '/auth/recover', '', { username, code, password: 'baru' });
+  assert.equal((await recover(first)).statusCode, 401);
+  const attempts = await Promise.all([recover(current.toLowerCase()), recover(current.replaceAll('-', ' '))]);
+  assert.deepEqual(attempts.map(r => r.statusCode).sort(), [200, 401]);
+  assert.equal((await request('GET', '/dashboard', session)).statusCode, 401);
+  assert.equal((await request('GET', '/dashboard', secondSession)).statusCode, 401);
+  assert.equal((await request('GET', '/dashboard', childSession)).statusCode, 200);
+  assert.equal((await request('POST', '/auth/login', '', { username, password })).statusCode, 401);
+  const login = await request('POST', '/auth/login', '', { username, password: 'baru' });
+  assert.equal(login.statusCode, 200);
+  const recoveredDashboard = (await request('GET', '/dashboard', login.json().token)).json();
+  assert.equal(recoveredDashboard.children[0].id, profile.child.id);
+  assert.equal(recoveredDashboard.recoveryConfigured, false);
 });
 test('expired recordings cannot be reviewed or replayed and cleanup removes their files', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'jagabocil-retention-'));

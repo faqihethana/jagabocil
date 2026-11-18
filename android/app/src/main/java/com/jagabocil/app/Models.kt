@@ -14,13 +14,16 @@ import kotlinx.serialization.Serializable
     val id: String, val childId: String, val surahId: String, val status: String,
     val duration: Double, val createdAt: Long, val expiresAt: Long? = null,
     val usedAt: Long? = null, val feedback: String, val reviewer: String? = null,
+    val readyAt: Long? = null, val reviewedAt: Long? = null,
 ) {
     fun canUse(now: Long) = status == "approved" && usedAt == null && (expiresAt ?: 0L) > now
 }
 @Serializable data class Dashboard(
     val role: String, val name: String, val aiAvailable: Boolean, val children: List<Child>,
     val recitations: List<Recitation>, val surahs: List<Surah>, val serverTime: Long,
+    val recoveryConfigured: Boolean = false,
 )
+@Serializable data class RecoveryCode(val code: String)
 @Serializable data class PairCode(val code: String, val expiresAt: Long)
 @Serializable data class PairResponse(val pairing: PairCode)
 @Serializable data class CreatedChild(val child: Child, val pairing: PairCode)
