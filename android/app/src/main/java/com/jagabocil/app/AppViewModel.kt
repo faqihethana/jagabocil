@@ -128,6 +128,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         try { tvRemote.finishPair(code); load(); message = "Android TV terhubung. Izin ngaji tetap diperlukan untuk power." }
         finally { tvPairCodeNeeded = false }
     }
+    fun checkTv(c: Child) = action {
+        if (c.tvTransport == "wifi") {
+            tvRemote.checkConnection(c)
+            message = if (c.tvPlatform == "wol") {
+                "Wi-Fi dan MAC siap untuk Wake-on-LAN. Coba nyalakan TV dari standby setelah mendapat izin."
+            } else {
+                "Koneksi TV berhasil. Izin power tetap utuh."
+            }
+        } else {
+            infrared.check(c.tvBrand)
+            message = "Infrared 38 kHz siap di HP ini. Coba tombol power setelah mendapat izin."
+        }
+    }
     fun upload() = action {
         val child = dashboard?.children?.firstOrNull() ?: return@action
         val file = recordedFile ?: return@action

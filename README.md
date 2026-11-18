@@ -67,7 +67,7 @@ cd android
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
 1. Jalankan API, lalu buka APK pada emulator atau HP.
-2. Isi **Alamat server JagaBocil**. Ini alamat backend yang menyimpan akun, rekaman, dan persetujuan. Emulator Android Studio memakai `http://10.0.2.2:8787`. Untuk HP asli gunakan satu URL **HTTPS** yang dapat diakses kedua perangkat.
+2. **Alamat server JagaBocil** otomatis diisi dengan `https://jagabocil.onrender.com` pada instalasi baru. Gunakan alamat yang sama pada kedua HP. Untuk menjalankan backend sendiri, ubah alamat di layar masuk. Emulator Android Studio bisa memakai `http://10.0.2.2:8787` ketika API berjalan di komputer yang sama.
 3. Pilih **Orang tua → Daftar**, buat profil anak di tab **Keluarga**, dan simpan aturan serta profil TV.
 4. Buat kode pairing. Di HP anak pilih **Aku anak**, gunakan server yang sama, masukkan kode.
 5. Anak merekam surah sesuai tugas. Orang tua memutar salinannya di antrean, lalu memilih **Setujui** atau **Ulangi**. Mode AI dapat diaktifkan pada aturan anak jika server sudah dikonfigurasi dan orang tua menyetujui pengiriman audio.

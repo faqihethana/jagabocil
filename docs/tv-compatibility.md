@@ -22,6 +22,8 @@ Driver berikut sudah diimplementasikan dan memiliki tes format protokol/akses. *
 6. Simpan aturan. Izin lama dibatalkan. Pada **HP anak**, nyalakan TV memakai remote fisik lalu tekan **Hubungkan TV**. Untuk Google TV masukkan kode di layar; untuk Samsung/LG setujui permintaan akses.
 7. Rekam ngaji, tunggu persetujuan, lalu gunakan tombol power. Backend untuk ngaji tetap harus dapat diakses; perintah TV dikirim langsung dari HP ke TV melalui jaringan lokal.
 
+Di kartu remote HP anak, tekan **Cek koneksi TV** saat TV menyala untuk mencoba sesi Wi-Fi yang sudah dipairing. **Cek jaringan TV** memvalidasi Wi-Fi IPv4 dan MAC untuk Wake-on-LAN. **Cek infrared** memeriksa dukungan IR 38 kHz pada HP. Izin power tetap tersedia setelah pengecekan. Uji dengan tombol power untuk memastikan TV bisa menyala dari standby.
+
 Nama pengaturan wake bervariasi: Wake-on-LAN, Wake on Wireless LAN, Mobile TV On, IP Remote, atau opsi menyalakan lewat perangkat seluler. Dukungan saat TV standby berbeda dari dukungan saat TV menyala. Aplikasi tidak dapat mengaktifkan kemampuan wake yang tidak dimiliki TV.
 
 ## Batas kompatibilitas

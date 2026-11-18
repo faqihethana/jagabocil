@@ -7,6 +7,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.io.Closeable
+import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -77,6 +78,15 @@ class TvWifiRemote(context: Context, private val wifi: WifiTv) {
             credentials.save(pair.child, JSONObject().put("pin", pair.pin).put("token", ""))
         } finally { cancelPair() }
     }
+
+    suspend fun checkConnection(c: Child) = withContext(Dispatchers.IO) {
+        // Open the same paired session used for power and close it without sending the command.
+        try {
+            prepareConnected(c).use { }
+        } catch (error: IOException) {
+            throw IllegalStateException("TV belum bisa dihubungi. Pastikan TV menyala dan periksa IP, Wi-Fi, serta pairing.", error)
+        }
+    }
     suspend fun prepare(c: Child): TvPowerCommand {
         try { return prepareConnected(c) }
         catch (error: Exception) {
@@ -119,7 +129,7 @@ class TvWifiRemote(context: Context, private val wifi: WifiTv) {
                             response.containsKey(1) -> {
                                 features = RemoteWire.int(RemoteWire.fields(response.getValue(1)), 1) and 35
                                 check(features and 2 != 0) { "TV tidak menerima tombol remote." }
-                                val device = RemoteWire.number(3, 1) + RemoteWire.text(4, "1") + RemoteWire.text(5, "com.jagabocil.app") + RemoteWire.text(6, "0.2.0")
+                                val device = RemoteWire.number(3, 1) + RemoteWire.text(4, "1") + RemoteWire.text(5, BuildConfig.APPLICATION_ID) + RemoteWire.text(6, BuildConfig.VERSION_NAME)
                                 RemoteWire.writeFrame(socket.outputStream, RemoteWire.bytes(1, RemoteWire.number(1, features) + RemoteWire.bytes(2, device)))
                             }
                             response.containsKey(2) -> RemoteWire.writeFrame(socket.outputStream, RemoteWire.bytes(2, RemoteWire.number(1, features)))

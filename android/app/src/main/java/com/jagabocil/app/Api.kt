@@ -27,6 +27,8 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
+private const val DEFAULT_SERVER_URL = "https://jagabocil.onrender.com"
+
 class ApiError(val status: Int, message: String) : Exception(message)
 class Api(var baseUrl: String, var token: String = "") {
     val json = Json { ignoreUnknownKeys = true }
@@ -81,6 +83,6 @@ class SessionStore(context: Context) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(prefs.getString("iv", ""), Base64.NO_WRAP))) }
         String(cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP)))
     }.getOrDefault("")
-    fun server() = prefs.getString("server", if (BuildConfig.DEBUG) "http://10.0.2.2:8787" else "").orEmpty()
+    fun server() = prefs.getString("server", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_SERVER_URL
     fun clear() { prefs.edit { remove("token"); remove("iv") } }
 }

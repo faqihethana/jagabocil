@@ -258,6 +258,15 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(onClick = { vm.pairTv(child) }, enabled = !vm.busy && connectionProblem == null) { Text(if (paired) "Hubungkan ulang TV" else "Hubungkan TV") }
                 Text("Nyalakan TV saat pairing. Android/Google TV menampilkan kode; Samsung/LG meminta persetujuan di layar. Pairing tidak membuka izin power.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
             }
+            if (paired && connectionProblem == null) {
+                OutlinedButton(onClick = { vm.checkTv(child) }, enabled = !vm.busy) {
+                    Text(when {
+                        !wifi -> "Cek infrared"
+                        child.tvPlatform == "wol" -> "Cek jaringan TV"
+                        else -> "Cek koneksi TV"
+                    })
+                }
+            }
             Text(if (wifi) "Menyalakan dari standby memerlukan dukungan jaringan TV. Jika tersedia, isi MAC untuk Wake-on-LAN. Pengiriman perintah belum menjamin TV menyala." else "Kontrol infrared perlu HP dengan IR blaster dan profil TV yang cocok.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
