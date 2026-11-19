@@ -17,7 +17,7 @@ export function schemaName(value = 'jagabocil') {
 }
 export function postgresSql(sql: string, schema: string) {
   // Only application-owned, static statements use this adapter. Never interpolate user SQL.
-  const qualified = sql.replace(/\b(parents|children|tokens|recitations)\b/g, name => `${schemaName(schema)}."${name}"`);
+  const qualified = sql.replace(/\b(parents|children|tokens|recitations|billing_orders)\b/g, name => `${schemaName(schema)}."${name}"`);
   let index = 0, quoted = false, output = '';
   for (let i = 0; i < qualified.length; i++) {
     const ch = qualified[i]!;
@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -70,6 +70,16 @@ export const migration = (schema: string) => {
       ALTER TABLE ${s}.tokens ADD COLUMN IF NOT EXISTS auth_revision INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS ready_at BIGINT;
       ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS reviewed_at BIGINT;
+      INSERT INTO ${s}.schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      LOCK TABLE ${s}.parents IN ACCESS EXCLUSIVE MODE;
+      CREATE TABLE IF NOT EXISTS ${s}.billing_orders(id TEXT PRIMARY KEY,parent_id TEXT NOT NULL REFERENCES ${s}.parents(id),
+        amount INTEGER NOT NULL,created_at BIGINT NOT NULL,status TEXT NOT NULL,checkout_url TEXT,paid_at BIGINT);
+      CREATE UNIQUE INDEX IF NOT EXISTS billing_order_open ON ${s}.billing_orders(parent_id) WHERE status='open';
+      CREATE INDEX IF NOT EXISTS billing_order_paid ON ${s}.billing_orders(parent_id,paid_at) WHERE status='paid';
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

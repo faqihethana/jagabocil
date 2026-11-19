@@ -129,6 +129,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         onComplete()
     }
     fun dismissRecoveryCode() { recoveryCode = null }
+    fun startCheckout(openBrowser: (String) -> Unit) = action {
+        val result = api.json.decodeFromString<BillingResult>(api.request("/billing/checkout", "POST"))
+        dashboard = dashboard?.copy(billing = result.billing)
+        val url = result.checkoutUrl
+        if (url != null) {
+            val uri = url.toUri()
+            check(uri.scheme == "https" && uri.host == "app.sandbox.midtrans.com" && uri.userInfo == null) {
+                "Alamat checkout Midtrans tidak valid."
+            }
+            openBrowser(url)
+        } else message = billingMessage(result.billing)
+    }
+    fun checkPayment() = action {
+        val result = api.json.decodeFromString<BillingResult>(api.request("/billing/sync", "POST"))
+        dashboard = dashboard?.copy(billing = result.billing)
+        message = billingMessage(result.billing)
+    }
+    private fun billingMessage(billing: Billing) = when {
+        billing.pending -> "Pembayaran belum terkonfirmasi. Cek lagi sebentar."
+        (billing.expiresAt ?: 0L) > serverNow() -> "JagaBocil Plus Sandbox aktif."
+        else -> "Belum ada pembayaran terkonfirmasi. Mulai checkout jika ingin mencoba lagi."
+    }
     fun recover(server: String, username: String, code: String, password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
         val recoveryApi = Api(serverAddress(server))
         recoveryApi.request("/auth/recover", "POST",

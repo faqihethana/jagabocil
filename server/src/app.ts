@@ -12,6 +12,8 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { isTaskSurah, legacySurahs, quranNotice, quranText, taskRecordingLimit } from './catalog.js';
 import { passes, verdictSchema, type Verify } from './ai.js';
+import { billing } from './billing.js';
+import type { Midtrans } from './midtrans.js';
 
 const run = promisify(execFile);
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -26,7 +28,7 @@ type Child = { id: string; parent_id: string; name: string; mode: string; surah_
 type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
 // The original consent value (1) covered Gemini. DeepSeek requires a fresh opt-in.
 const aiConsentByProvider = { gemini: 1, deepseek: 2 } as const;
-type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; verify?: Verify; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number };
+type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; verify?: Verify; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
 class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }
 const fail = (code: number, message: string): never => { throw new HttpError(code, message); };
 
@@ -70,6 +72,7 @@ export async function createApp(options: Options) {
     if (required && token.role !== required) return fail(403, 'Hanya orang tua yang dapat mengubah ini.');
     return { role: token.role, id: token.subject_id, authRevision: token.auth_revision };
   }
+  const subscription = billing(app, db, now, async req => (await actor(req, 'parent')).id, options.midtrans);
   async function newToken(role: Actor['role'], id: string, revision: number) {
     const token = randomBytes(32).toString('base64url');
     const expiration = now() + 30 * day;
@@ -219,7 +222,8 @@ export async function createApp(options: Options) {
     const parent = a.role === 'parent' ? await one<{ name: string; recovery_hash: string | null }>('SELECT name,recovery_hash FROM parents WHERE id=?', a.id) : undefined;
     const localQuran = (req.query as { quran?: string }).quran === 'local';
     const surahs = localQuran ? [] : legacySurahs([...children.map(c => c.surah_id), ...recs.map(r => r.surah_id)]);
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now() };
+    const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));

@@ -13,6 +13,10 @@ export function sqliteDatabase(path: string): Database {
     CREATE TABLE IF NOT EXISTS recitations(id TEXT PRIMARY KEY, child_id TEXT NOT NULL REFERENCES children(id), surah_id TEXT NOT NULL,
       status TEXT NOT NULL, duration REAL NOT NULL, path TEXT NOT NULL, mime TEXT NOT NULL, created_at INTEGER NOT NULL,
       expires_at INTEGER, used_at INTEGER, feedback TEXT NOT NULL, reviewer TEXT);
+    CREATE TABLE IF NOT EXISTS billing_orders(id TEXT PRIMARY KEY,parent_id TEXT NOT NULL REFERENCES parents(id),
+      amount INTEGER NOT NULL,created_at INTEGER NOT NULL,status TEXT NOT NULL,checkout_url TEXT,paid_at INTEGER);
+    CREATE UNIQUE INDEX IF NOT EXISTS billing_order_open ON billing_orders(parent_id) WHERE status='open';
+    CREATE INDEX IF NOT EXISTS billing_order_paid ON billing_orders(parent_id,paid_at) WHERE status='paid';
     CREATE INDEX IF NOT EXISTS children_parent ON children(parent_id);
     CREATE INDEX IF NOT EXISTS recitations_child_date ON recitations(child_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS tokens_subject ON tokens(subject_id);

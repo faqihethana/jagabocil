@@ -420,6 +420,7 @@ class MainActivity : ComponentActivity() {
     AddChild(vm)
     NotificationSetting(vm, parent = true)
     RecoverySetting(vm, data.recoveryConfigured)
+    if (BuildConfig.DEBUG) data.billing?.let { BillingSetting(vm, it) }
     Text("Kode penghubung hanya untuk HP anak. Jangan bagikan kata sandi akun orang tua.", fontSize = 12.sp, color = Muted)
 }
 

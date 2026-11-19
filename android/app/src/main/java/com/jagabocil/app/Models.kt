@@ -22,7 +22,10 @@ import kotlinx.serialization.Serializable
     val role: String, val name: String, val aiAvailable: Boolean, val children: List<Child>,
     val recitations: List<Recitation>, val surahs: List<Surah>, val serverTime: Long,
     val recoveryConfigured: Boolean = false, val juz30Tasks: Boolean = false,
+    val billing: Billing? = null,
 )
+@Serializable data class Billing(val amount: Int, val days: Int, val expiresAt: Long?, val pending: Boolean)
+@Serializable data class BillingResult(val billing: Billing, val checkoutUrl: String? = null)
 @Serializable data class RecoveryCode(val code: String)
 @Serializable data class PairCode(val code: String, val expiresAt: Long)
 @Serializable data class PairResponse(val pairing: PairCode)

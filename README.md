@@ -80,6 +80,14 @@ HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release me
 
 Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka pakai ke kolom Username. Nama tampilan dan kata sandi akun lama tetap bisa digunakan.
 
+## Uji checkout Midtrans Sandbox
+
+Build debug menampilkan **Keluarga → JagaBocil Plus Sandbox** untuk akun orang tua ketika backend diaktifkan dengan Server Key Sandbox. Satu pembayaran uji Rp19.000 memberi status Plus selama 30 hari, dan pembayaran berikutnya memperpanjang masa aktif. Tahap ini menguji pembayaran dan masa aktif Plus. Pembatasan profil dan kuota AI belum diterapkan.
+
+1. Di dashboard Midtrans, pilih **Sandbox → Settings → Access Keys**. Isi `MIDTRANS_SANDBOX_SERVER_KEY` di `server/.env.local` untuk `npm run dev`, di `.env` root untuk Docker Compose, atau sebagai secret server uji. Untuk PostgreSQL, jalankan `npm run db:migrate` dengan URL direct sebelum menjalankan versi baru.
+2. Untuk menguji webhook, isi `MIDTRANS_PUBLIC_ORIGIN` dengan origin HTTPS publik server uji. Backend mendaftarkan `/billing/midtrans/notify` untuk setiap transaksi dan memakai origin yang sama untuk halaman kembali dari checkout. Untuk uji lokal tanpa URL publik, gunakan **Cek pembayaran** setelah simulasi.
+3. Arahkan APK debug ke server uji, masuk sebagai orang tua, lalu tekan **Uji checkout** di tab **Keluarga**. Buat pembayaran QRIS atau GoPay dan selesaikan dengan [Midtrans Sandbox Simulator](https://simulator.midtrans.com/). Kembali ke aplikasi dan tekan **Cek pembayaran** jika status masih menunggu. Status aktif ditampilkan bersama tanggal berakhirnya.
+
 ## Privasi dan akses
 
 Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di server, berlaku 30 hari, dan dienkripsi dengan Android Keystore di HP. API audio memerlukan autentikasi dan pemeriksaan kepemilikan keluarga. S3 hanya menggunakan prefix `jagabocil/`, enkripsi SSE-S3, dan respons audio melalui API keluarga; tidak ada URL publik rekaman. Saat startup mode S3, server memakai probe tanpa data anak pada prefix rekaman untuk memeriksa penolakan akses anonim sebelum menerima upload. Upload M4A/WAV dibatasi 10 MB. Durasi maksimal 180 detik untuk surah hingga 20 ayat dan 480 detik untuk surah yang lebih panjang. Server memeriksa durasi berkas menggunakan ffprobe.

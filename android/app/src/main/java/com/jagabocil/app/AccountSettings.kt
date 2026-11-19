@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PersistableBundle
@@ -38,6 +39,39 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import java.text.DateFormat
+import java.text.NumberFormat
+import java.util.Date
+import java.util.Locale
+
+@Composable internal fun BillingSetting(vm: AppViewModel, billing: Billing) {
+    val context = LocalContext.current
+    val locale = Locale.forLanguageTag("id-ID")
+    val price = NumberFormat.getIntegerInstance(locale).format(billing.amount)
+    val activeUntil = billing.expiresAt?.takeIf { it > vm.serverNow() }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("JagaBocil Plus Sandbox", style = MaterialTheme.typography.titleMedium)
+        Text("Uji checkout Rp$price untuk ${billing.days} hari. Tidak ada uang sungguhan atau perpanjangan otomatis.", style = MaterialTheme.typography.bodySmall)
+        if (activeUntil != null) {
+            val date = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, locale).format(Date(activeUntil))
+            Text("Plus Sandbox aktif sampai $date", style = MaterialTheme.typography.bodyMedium)
+        }
+        if (billing.pending) Text("Menunggu konfirmasi pembayaran", style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(enabled = !vm.busy, onClick = {
+            vm.startCheckout { context.startActivity(Intent(Intent.ACTION_VIEW, it.toUri())) }
+        }) {
+            Text(when {
+                billing.pending -> "Lanjut bayar"
+                activeUntil != null -> "Uji perpanjang Plus"
+                else -> "Uji checkout"
+            })
+        }
+        if (billing.pending) TextButton(enabled = !vm.busy, onClick = vm::checkPayment) {
+            Text("Cek pembayaran")
+        }
+    }
+}
 
 @Composable internal fun NotificationSetting(vm: AppViewModel, parent: Boolean) {
     val context = LocalContext.current

@@ -3,6 +3,10 @@ import { createVerifier } from './ai.js';
 import { createDeepSeekVerifier } from './deepseek.js';
 import { postgresDatabase } from './database.js';
 import { s3Recordings, verifyPrivateS3 } from './recordings.js';
+import { midtransSandbox } from './midtrans.js';
+
+const midtransKey = process.env.MIDTRANS_SANDBOX_SERVER_KEY?.trim();
+const midtrans = midtransKey ? midtransSandbox(midtransKey, process.env.MIDTRANS_PUBLIC_ORIGIN?.trim()) : undefined;
 
 const s3 = {
   bucket: process.env.AWS_S3_BUCKET_NAME || 'faqih-ethana-general-bucket',
@@ -20,6 +24,7 @@ const geminiKey = process.env.GEMINI_API_KEY?.trim();
 const app = await createApp({
   dataDir: process.env.DATA_DIR || './data', logger: true,
   database,
+  midtrans,
   recordings: useS3 ? s3Recordings(s3) : undefined,
   aiProvider: deepSeekKey ? 'deepseek' : 'gemini',
   verify: deepSeekKey ? createDeepSeekVerifier(deepSeekKey)
