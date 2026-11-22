@@ -18,12 +18,15 @@ import type { Midtrans } from './midtrans.js';
 const run = promisify(execFile);
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const day = 86_400_000;
+const sessionDuration = 30 * day;
+const pairingDuration = 10 * 60_000;
+const setupDuration = 10 * 60_000;
 function isPrivateIpv4(host: string) {
   if (!/^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$/.test(host)) return false;
   const [a, b, c, d] = host.split('.').map(Number);
   return [a,b,c,d].every(x => x !== undefined && x <= 255) && (a === 10 || a === 192 && b === 168 || a === 172 && b! >= 16 && b! <= 31);
 }
-type Actor = { role: 'parent' | 'child'; id: string; authRevision: number };
+type Actor = { role: 'parent' | 'child'; id: string; authRevision: number; tokenHash: string; expires: number };
 type Child = { id: string; parent_id: string; name: string; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
 type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
 // The original consent value (1) covered Gemini. DeepSeek requires a fresh opt-in.
@@ -63,21 +66,22 @@ export async function createApp(options: Options) {
   app.addHook('onSend', async (_req, reply) => { reply.header('Cache-Control', 'no-store').header('X-Content-Type-Options', 'nosniff'); });
   async function actor(req: FastifyRequest, required?: Actor['role']): Promise<Actor> {
     const raw = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
-    const token = raw ? await one<{ role: Actor['role']; subject_id: string; auth_revision: number }>(
-      `SELECT t.role,t.subject_id,t.auth_revision FROM tokens t WHERE t.hash=? AND t.expires>?
+    const tokenHash = raw ? digest(raw) : '';
+    const token = tokenHash ? await one<{ role: Actor['role']; subject_id: string; auth_revision: number; expires: number }>(
+      `SELECT t.role,t.subject_id,t.auth_revision,t.expires FROM tokens t WHERE t.hash=? AND t.expires>?
        AND (t.role='child' OR EXISTS(SELECT 1 FROM parents p WHERE p.id=t.subject_id AND p.auth_revision=t.auth_revision))`,
-      digest(raw), now(),
+      tokenHash, now(),
     ) : undefined;
     if (!token) return fail(401, 'Sesi habis. Silakan masuk lagi.');
-    if (required && token.role !== required) return fail(403, 'Hanya orang tua yang dapat mengubah ini.');
-    return { role: token.role, id: token.subject_id, authRevision: token.auth_revision };
+    if (required && token.role !== required) return fail(403, required === 'parent' ? 'Hanya orang tua yang dapat mengubah ini.' : 'Gunakan HP anak untuk langkah ini.');
+    return { role: token.role, id: token.subject_id, authRevision: token.auth_revision, tokenHash, expires: token.expires };
   }
   const subscription = billing(app, db, now, async req => (await actor(req, 'parent')).id, options.midtrans);
   async function newToken(role: Actor['role'], id: string, revision: number) {
     const token = randomBytes(32).toString('base64url');
-    const expiration = now() + 30 * day;
+    const expiration = now() + sessionDuration;
     if (role === 'child') {
-      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires) SELECT ?,?,?,? FROM children WHERE id=? AND revision=?', digest(token), role, id, expiration, id, revision);
+      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,revision FROM children WHERE id=? AND revision=?', digest(token), role, id, expiration, id, revision);
       if (!inserted.changes) return fail(409, 'Perangkat dicabut saat pairing. Minta kode baru ke orang tua.');
     } else {
       const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,auth_revision FROM parents WHERE id=? AND auth_revision=?',
@@ -100,11 +104,16 @@ export async function createApp(options: Options) {
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
   const publicChild = (c: Child) => ({ id: c.id, name: c.name, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, aiConsent: hasAiConsent(c) });
   const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer });
+  const awaitingTv = (c: Child) => c.tv_transport === 'infrared' && c.tv_brand === 'none';
+  // The capability belongs to a recently paired device and the policy revision it received.
+  const tvSetupUntil = (a: Actor) => a.expires - sessionDuration + setupDuration;
+  const powerPermit = (c: Child) => ({ authorized: true, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, expiresAt: now() + 10_000 });
   async function pairing(id: string) {
     let code: string;
     do { code = String(randomInt(100_000, 1_000_000)); } while ((await one('SELECT id FROM children WHERE pair_hash=?', digest(code))));
-    await change('UPDATE children SET pair_hash=?,pair_expires=? WHERE id=?', digest(code), now() + 600_000, id);
-    return { code, expiresAt: now() + 600_000 };
+    const expiresAt = now() + pairingDuration;
+    await change('UPDATE children SET pair_hash=?,pair_expires=? WHERE id=?', digest(code), expiresAt, id);
+    return { code, expiresAt };
   }
   async function cleanup() {
     for (const r of (await all<Recitation>("SELECT * FROM recitations WHERE created_at<? OR status='deleting'", now() - 7 * day))) {
@@ -223,7 +232,9 @@ export async function createApp(options: Options) {
     const localQuran = (req.query as { quran?: string }).quran === 'local';
     const surahs = localQuran ? [] : legacySurahs([...children.map(c => c.surah_id), ...recs.map(r => r.surah_id)]);
     const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan };
+    const firstChild = children[0];
+    const setup = a.role === 'child' && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));
@@ -299,6 +310,20 @@ export async function createApp(options: Options) {
     await change('DELETE FROM recitations WHERE id=?', r.id);
     return { ok: true };
   });
+  app.post('/tv/setup', async req => {
+    const a = await actor(req, 'child');
+    const { platform, host } = z.object({ platform: z.enum(['androidtv', 'samsung', 'lg']), host: z.string().max(15).refine(isPrivateIpv4) }).parse(req.body);
+    const at = now();
+    if (tvSetupUntil(a) <= at) return fail(409, 'Waktu tes TV habis. Minta orang tua membuat kode sambung baru.');
+    const updated = await one<Child>(
+      `UPDATE children AS c SET tv_transport='wifi',tv_platform=?,tv_host=?,tv_mac='',revision=revision+1
+       WHERE c.id=? AND c.revision=? AND c.tv_transport='infrared' AND c.tv_brand='none'
+       AND EXISTS(SELECT 1 FROM tokens t WHERE t.hash=? AND t.role='child' AND t.subject_id=c.id AND t.expires>?)
+       RETURNING *`, platform, host, a.id, a.authRevision, a.tokenHash, at,
+    );
+    if (!updated) return fail(409, 'Tes TV ini sudah tidak tersedia. Minta orang tua cek pengaturan TV.');
+    return { child: publicChild(updated), permit: powerPermit(updated) };
+  });
   app.post('/tv/authorize', async req => {
     const a = await actor(req, 'child');
     const { recitationId, tvTransport } = z.object({ recitationId: z.string().uuid(), tvTransport: z.enum(['infrared', 'wifi']).default('infrared') }).parse(req.body);
@@ -308,7 +333,7 @@ export async function createApp(options: Options) {
     if (c.tv_transport === 'wifi' && (c.tv_platform === 'wol' ? !c.tv_mac : !isPrivateIpv4(c.tv_host))) return fail(400, 'Minta orang tua melengkapi pengaturan Wi-Fi TV dulu.');
     const used = (await change("UPDATE recitations SET used_at=? WHERE id=? AND child_id=? AND status='approved' AND used_at IS NULL AND expires_at>? AND created_at>?", now(), r.id, c.id, now(), now() - 7 * day));
     if (!used.changes) return fail(403, 'Ngaji perlu disetujui dulu. Izin hanya berlaku sekali dan bisa kedaluwarsa.');
-    return { authorized: true, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, expiresAt: now() + 10_000 };
+    return powerPermit(c);
   });
   return app;
 }

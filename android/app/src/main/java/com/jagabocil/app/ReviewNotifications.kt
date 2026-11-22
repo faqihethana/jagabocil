@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
@@ -19,6 +20,8 @@ import androidx.work.WorkerParameters
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+
+internal const val REVIEW_RECORDING_EXTRA = "com.jagabocil.app.REVIEW_RECORDING"
 
 internal data class ReviewNotice(val id: String, val at: Long, val kind: String) {
     val key get() = "$at:$id:$kind"
@@ -104,9 +107,12 @@ internal class ReviewNotifications(context: Context) {
             "approved" -> "Bacaanmu disetujui. Lihat hasilnya di JagaBocil."
             else -> "Bacaanmu perlu diulang. Lihat hasilnya di JagaBocil."
         }
-        val openApp = PendingIntent.getActivity(app, 0,
-            Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val intent = Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (notice.kind == "pending") {
+            intent.data = Uri.Builder().scheme("jagabocil").authority("review").appendPath(notice.id).build()
+            intent.putExtra(REVIEW_RECORDING_EXTRA, notice.id)
+        }
+        val openApp = PendingIntent.getActivity(app, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Rekaman dan hasil review", NotificationManager.IMPORTANCE_DEFAULT))
         val notification = NotificationCompat.Builder(app, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info)

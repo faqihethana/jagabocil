@@ -9,7 +9,9 @@ import kotlinx.serialization.Serializable
     val minSeconds: Int, val unlockMinutes: Int, val tvBrand: String, val aiConsent: Boolean,
     val tvTransport: String = "infrared", val tvMac: String = "",
     val tvPlatform: String = "wol", val tvHost: String = "",
-)
+) {
+    val awaitsTv get() = tvTransport == "infrared" && tvBrand == "none"
+}
 @Serializable data class Recitation(
     val id: String, val childId: String, val surahId: String, val status: String,
     val duration: Double, val createdAt: Long, val expiresAt: Long? = null,
@@ -23,7 +25,9 @@ import kotlinx.serialization.Serializable
     val recitations: List<Recitation>, val surahs: List<Surah>, val serverTime: Long,
     val recoveryConfigured: Boolean = false, val juz30Tasks: Boolean = false,
     val billing: Billing? = null,
+    val tvSetupUntil: Long? = null,
 )
+@Serializable data class UploadedRecitation(val recitation: Recitation)
 @Serializable data class Billing(val amount: Int, val days: Int, val expiresAt: Long?, val pending: Boolean)
 @Serializable data class BillingResult(val billing: Billing, val checkoutUrl: String? = null)
 @Serializable data class RecoveryCode(val code: String)
@@ -40,3 +44,4 @@ import kotlinx.serialization.Serializable
 @Serializable data class Permit(val authorized: Boolean, val tvBrand: String, val expiresAt: Long,
     val tvTransport: String = "infrared", val tvMac: String = "",
     val tvPlatform: String = "wol", val tvHost: String = "")
+@Serializable data class TvSetupResult(val child: Child, val permit: Permit)

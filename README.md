@@ -70,11 +70,11 @@ cd android
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
 1. Jalankan API, lalu buka APK pada emulator atau HP.
-2. **Alamat server JagaBocil** otomatis diisi dengan `https://jagabocil.onrender.com` pada instalasi baru. Gunakan alamat yang sama pada kedua HP. Untuk menjalankan backend sendiri, ubah alamat di layar masuk. Emulator Android Studio bisa memakai `http://10.0.2.2:8787` ketika API berjalan di komputer yang sama.
-3. Pilih **Orang tua → Daftar**, buat profil anak di tab **Keluarga**, dan simpan aturan serta profil TV.
-4. Buat kode pairing. Di HP anak pilih **Aku anak**, gunakan server yang sama, masukkan kode.
-5. Anak merekam surah sesuai tugas. Orang tua memutar salinannya di antrean, lalu memilih **Setujui** atau **Ulangi**. Mode AI dapat diaktifkan pada aturan anak jika server sudah dikonfigurasi dan orang tua menyetujui pengiriman audio.
-6. Untuk infrared, arahkan IR blaster HP anak ke TV. Untuk Wi-Fi, pilih platform/IP/MAC pada aturan anak, lalu gunakan **Hubungkan TV** di HP anak saat TV menyala (kecuali mode Wake-on-LAN yang tidak memakai pairing). Setelah bacaan disetujui, tombol mengirim satu permintaan power melalui metode yang dipilih.
+2. Instalasi baru otomatis memakai `https://jagabocil.onrender.com`. Untuk backend sendiri, buka **Pengaturan lanjutan** di layar masuk dan isi alamat yang sama pada kedua HP. Emulator Android Studio bisa memakai `http://10.0.2.2:8787` jika API berjalan di komputer yang sama.
+3. Pilih **Orang tua → Daftar**, lalu buat profil anak. Bacaan awalnya Al-Ikhlas dengan pemeriksaan orang tua. Untuk memilih bacaan lain, buka **Ubah aturan**.
+4. Di HP anak, pilih **Aku anak → Pindai QR** dan arahkan kamera ke QR di HP orang tua. Jika perlu, pilih **Masukkan kode angka**. QR dan kode memakai izin sambung sekali pakai yang sama.
+5. Untuk TV Wi-Fi yang belum diatur, **Siapkan TV** mencari perangkat yang menyala di Wi-Fi yang sama. Pilih TV, ikuti petunjuk di layar TV, lalu coba **Tes nyalakan TV** dan konfirmasi hasilnya. Satu tes tersedia selama 10 menit setelah HP anak terhubung dan membutuhkan backend yang mendukung alur ini. Untuk konfigurasi dari HP orang tua, pilih **Pilih TV dari HP ini**, atau buka **Ubah aturan → Pengaturan TV lanjutan** untuk infrared, IP manual, atau Wake-on-LAN. Di HP anak, **Panduan** menyediakan pengecekan sambungan.
+6. Di HP anak, surah langsung tampil bersama **Mulai rekam** dan **Selesai & kirim**. Ketuk notifikasi di HP orang tua untuk membuka rekaman, atau buka antrean di **Beranda**. Dengarkan, lalu pilih **Setujui** atau **Minta ulang**. Setelah disetujui, HP anak menampilkan **Nyalakan TV** untuk satu kali pemakaian.
 
 HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Distribusi Play Store belum tersedia.
 

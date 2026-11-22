@@ -50,6 +50,46 @@ test('dashboard and role boundaries require authentication', async () => {
   assert.equal((await request('PUT', `/children/${childId}/policy`, outsider, policy)).statusCode, 404);
   assert.equal((await request('GET', '/dashboard', outsider)).json().children.length, 0);
 });
+test('a freshly linked child can configure and test one TV without unlocking daily power', async () => {
+  const profile = (await request('POST', '/children', parent, { name: 'Anak baru' })).json();
+  const linked = (await request('POST', '/pair', '', { code: profile.pairing.code })).json().token;
+  const target = { platform: 'androidtv', host: '192.168.1.20' };
+  const dashboard = async () => (await request('GET', '/dashboard', linked)).json();
+  assert.equal((await dashboard()).tvSetupUntil, now + 10 * 60_000);
+  assert.equal((await request('POST', '/tv/setup', parent, target)).statusCode, 403);
+  assert.equal((await request('POST', '/tv/setup', linked, { ...target, host: '8.8.8.8' })).statusCode, 400);
+  const results = await Promise.all([
+    request('POST', '/tv/setup', linked, target),
+    request('POST', '/tv/setup', linked, { ...target, host: '192.168.1.21' }),
+  ]);
+  assert.deepEqual(results.map(r => r.statusCode).sort(), [200, 409]);
+  const saved = results.find(r => r.statusCode === 200)!.json();
+  assert.equal(saved.permit.tvHost, saved.child.tvHost);
+  assert.equal(saved.permit.expiresAt, now + 10_000);
+  assert.equal((await dashboard()).tvSetupUntil, null);
+  assert.equal((await dashboard()).children[0].tvHost, saved.child.tvHost);
+  const audio = multipart(wav(16), '112');
+  const rec = await app.inject({ method: 'POST', url: '/recitations', remoteAddress: '192.0.2.1', headers: { ...audio.headers, authorization: `Bearer ${linked}` }, payload: audio.payload });
+  assert.equal(rec.statusCode, 201);
+  assert.equal((await request('POST', '/tv/authorize', linked, { recitationId: rec.json().recitation.id, tvTransport: 'wifi' })).statusCode, 403);
+  await request('DELETE', `/recitations/${rec.json().recitation.id}`, parent);
+});
+test('TV setup expires and never overwrites a TV set by the parent', async () => {
+  const profile = (await request('POST', '/children', parent, { name: 'Adik' })).json();
+  const linked = (await request('POST', '/pair', '', { code: profile.pairing.code })).json().token;
+  const target = { platform: 'lg', host: '192.168.1.20' };
+  await request('PUT', `/children/${profile.child.id}/policy`, parent, policy);
+  assert.equal((await request('POST', '/tv/setup', linked, target)).statusCode, 409);
+  await request('PUT', `/children/${profile.child.id}/policy`, parent, { ...policy, tvBrand: 'none' });
+  const pair = (await request('POST', `/children/${profile.child.id}/pairing`, parent)).json().pairing;
+  const relinked = (await request('POST', '/pair', '', { code: pair.code })).json().token;
+  const originalTime = now;
+  try {
+    now += 10 * 60_000;
+    assert.equal((await request('GET', '/dashboard', relinked)).json().tvSetupUntil, null);
+    assert.equal((await request('POST', '/tv/setup', relinked, target)).statusCode, 409);
+  } finally { now = originalTime; }
+});
 test('rejects fake, short, overlong, or wrong-surah audio and removes rejected files', async () => {
   for (const data of [Buffer.from('not audio'), wav(2), wav(181)]) assert.equal((await upload(child, data)).statusCode, 400);
   assert.equal((await upload(child, wav(11), '114')).statusCode, 400);

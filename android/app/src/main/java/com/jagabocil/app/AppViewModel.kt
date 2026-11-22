@@ -48,6 +48,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var recordedFile by mutableStateOf<File?>(null); private set
     var playing by mutableStateOf<String?>(null); private set
     var pairing by mutableStateOf<PairCode?>(null)
+        private set
+    var pairingChild by mutableStateOf<Child?>(null)
+        private set
+    var setupTarget by mutableStateOf<Child?>(null)
+        private set
+    var tvTestSent by mutableStateOf(false)
+        private set
+    private var reviewFromNotification: String? = null
     var screen by mutableStateOf("home")
     val loggedIn get() = api.token.isNotEmpty()
     fun serverNow() = System.currentTimeMillis() + clockOffset
@@ -81,6 +89,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         api.token = ""
         dashboard = null
         recoveryCode = null
+        dismissPairing()
+        setupTarget = null
+        tvTestSent = false
+        reviewFromNotification = null
+        screen = "home"
         tvRemote.clear()
         tvPairCodeNeeded = false
         notifications.clearSession()
@@ -91,6 +104,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val result = api.dashboard()
         clockOffset = result.serverTime - System.currentTimeMillis()
         dashboard = result
+        reviewFromNotification?.let { openReview(it) }
         if (notificationsEnabled) withContext(Dispatchers.IO) { notifications.observe(result, server, token) }
     }
     fun refresh() { if (foreground && loggedIn) action { load() } }
@@ -104,7 +118,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         api.baseUrl = serverAddress(server); api.token = ""
         val body = if (child) api.body("code" to code.trim()) else api.body("username" to username.trim(), "password" to password)
         val auth = api.json.decodeFromString<Auth>(api.request(if (child) "/pair" else if (register) "/auth/register" else "/auth/login", "POST", body))
-        api.token = auth.token; store.save(auth.token, api.baseUrl); load(); screen = "home"
+        api.token = auth.token
+        store.save(auth.token, api.baseUrl)
+        screen = "home"
+        load()
+        if (child) {
+            val data = dashboard
+            val profile = data?.children?.firstOrNull()
+            if ((data?.tvSetupUntil ?: 0) > serverNow() || profile?.tvTransport == "wifi" && !tvRemote.paired(profile)) {
+                screen = "tv-setup"
+            }
+        }
         notifications.schedule()
     }
     fun setNotifications(enabled: Boolean) {
@@ -161,15 +185,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() = action {
         stopPlayback(); discardRecording()
         runCatching { api.request("/auth/logout", "POST") }
-        clearSession(); screen = "home"
+        clearSession()
     }
-    fun addChild(name: String) = action {
+    fun addChild(name: String, onCreated: () -> Unit) = action {
         val result = api.json.decodeFromString<CreatedChild>(api.request("/children", "POST", api.body("name" to name)))
-        pairing = result.pairing; load()
+        pairingChild = result.child
+        pairing = result.pairing
+        dashboard = dashboard?.let { it.copy(children = it.children + result.child) }
+        onCreated()
+        load()
     }
-    fun pairChild(id: String) = action {
-        pairing = api.json.decodeFromString<PairResponse>(api.request("/children/$id/pairing", "POST")).pairing
+    fun pairChild(child: Child) = action {
+        pairing = api.json.decodeFromString<PairResponse>(api.request("/children/${child.id}/pairing", "POST")).pairing
+        pairingChild = child
     }
+    fun dismissPairing() { pairing = null; pairingChild = null }
     fun policy(child: Child, p: Policy) = action {
         api.request("/children/${child.id}/policy", "PUT", api.json.encodeToString(p).toRequestBody("application/json".toMediaType()))
         load(); message = "Aturan disimpan. Anak perlu merekam ngaji baru."; screen = "home"
@@ -177,6 +207,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun revoke(id: String) = action { api.request("/children/$id/devices", "DELETE"); load(); message = "Perangkat anak diputus dan izin dicabut." }
     fun review(id: String, approve: Boolean) = action {
         api.request("/recitations/$id/review", "POST", api.body("decision" to if (approve) "approve" else "reject")); load()
+        if (screen == "review:$id") { stopPlayback(); screen = "home" }
+    }
+    fun openReview(id: String) {
+        if (!loggedIn) return
+        val data = dashboard
+        if (data == null) { reviewFromNotification = id; refresh(); return }
+        reviewFromNotification = null
+        if (data.role != "parent") return
+        screen = "review:$id"
+        refresh()
     }
     fun deleteRecording(id: String) = action { stopPlayback(); api.request("/recitations/$id", "DELETE"); load() }
     fun startRecording() {
@@ -201,6 +241,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ticker?.cancel(); recording = false
         try { recordedFile = recorder.stop() } catch (_: Exception) { recordedFile = null; message = "Rekaman terlalu singkat atau terputus. Yuk, ulangi." }
     }
+    fun finishAndUpload() {
+        val minimum = dashboard?.children?.firstOrNull()?.minSeconds ?: return
+        if (busy || !recording || seconds < minimum) return
+        finishRecording()
+        if (recordedFile != null) upload()
+    }
     fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; recordedSurahId = null; seconds = 0 }
     fun foregrounded() {
         val wasActive = foreground
@@ -211,15 +257,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelTvPair() { tvRemote.cancelPair(); tvPairCodeNeeded = false }
     internal suspend fun discoverTvs() = tvDiscovery.find()
 
+    internal fun chooseSetupTv(child: Child, tv: DiscoveredTv) {
+        if (busy) return
+        val target = child.copy(tvTransport = "wifi", tvPlatform = tv.platform.id, tvHost = tv.host, tvMac = "")
+        setupTarget = target
+        if (!tvRemote.paired(target)) pairTv(target)
+    }
+
+    fun leaveTvSetup() {
+        cancelTvPair()
+        setupTarget = null
+        tvTestSent = false
+        screen = "home"
+    }
+
+    fun testSetupTv() = action {
+        val target = setupTarget ?: return@action
+        val command = try {
+            tvRemote.prepare(target)
+        } catch (error: IllegalStateException) {
+            throw IllegalStateException("TV belum merespons. Pastikan HP dan TV memakai Wi-Fi yang sama. Coba lagi saat koneksi Wi-Fi TV masih aktif.", error)
+        }
+        try {
+            check(foreground) { "Buka JagaBocil untuk mengetes TV." }
+            val result = api.json.decodeFromString<TvSetupResult>(api.request("/tv/setup", "POST", api.body("platform" to target.tvPlatform, "host" to target.tvHost)))
+            dashboard = dashboard?.copy(children = listOf(result.child), tvSetupUntil = null)
+            setupTarget = null
+            val permit = result.permit
+            check(permit.authorized && permit.expiresAt > serverNow() && permit.tvTransport == "wifi" && permit.tvPlatform == target.tvPlatform && permit.tvHost == target.tvHost) { "Izin tes TV tidak berlaku. Coba cek TV dari Panduan." }
+            check(foreground) { "Tes berhenti saat aplikasi ditutup. Cek TV dari Panduan." }
+            try { command.send() }
+            catch (error: java.io.IOException) { throw IllegalStateException("Sinyal tes gagal dikirim. Cek TV dari Panduan.", error) }
+            tvTestSent = true
+        } finally { withContext(Dispatchers.IO) { runCatching { command.close() } } }
+    }
+
+    internal fun chooseFamilyTv(child: Child, tv: DiscoveredTv) = policy(child, Policy(
+        child.mode, child.surahId, child.minSeconds, child.unlockMinutes, child.tvBrand, child.aiConsent,
+        "wifi", "", tv.platform.id, tv.host,
+    ))
+
     fun pairTv(c: Child) = action {
         message = "Nyalakan TV dan setujui JagaBocil pada layar TV jika diminta."
-        val paired = try { tvRemote.pair(c) } catch (error: java.io.IOException) { throw IllegalStateException("TV belum bisa dihubungi. Nyalakan TV, periksa IP dan jaringan Wi-Fi, lalu coba pairing lagi.", error) }
+        val paired = try { tvRemote.pair(c) } catch (error: java.io.IOException) { throw IllegalStateException("TV belum bisa dihubungi. Nyalakan TV, pastikan HP dan TV memakai Wi-Fi yang sama, lalu coba lagi.", error) }
         if (!foreground) { cancelTvPair(); return@action }
         tvPairCodeNeeded = !paired
-        if (paired) { load(); message = "TV terhubung ke HP ini. Izin ngaji tetap diperlukan untuk power." }
+        if (paired) { load(); message = "TV terhubung ke HP ini." }
     }
     fun finishTvPair(code: String) = action {
-        try { tvRemote.finishPair(code); load(); message = "Android TV terhubung. Izin ngaji tetap diperlukan untuk power." }
+        try { tvRemote.finishPair(code); load(); message = "Android TV terhubung." }
         finally { tvPairCodeNeeded = false }
     }
     fun checkTv(c: Child) = action {
@@ -240,7 +326,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val file = recordedFile ?: return@action
         val surahId = recordedSurahId ?: return@action
         require(surahId == child.surahId) { "Surah tugas berubah. Hapus rekaman ini dan mulai lagi." }
-        api.upload(file, surahId); discardRecording(); load(); screen = "home"
+        val result = api.json.decodeFromString<UploadedRecitation>(api.upload(file, surahId)).recitation
+        discardRecording()
+        dashboard = dashboard?.let { it.copy(recitations = listOf(result) + it.recitations.filter { rec -> rec.id != result.id }) }
+        screen = "home"
         message = "Rekaman terkirim. Terima kasih sudah mengaji!"
     }
     fun play(rec: Recitation) = action {

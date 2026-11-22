@@ -82,7 +82,7 @@ import java.util.Locale
         Column(Modifier.weight(1f)) {
             Text("Notifikasi", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (parent) "Beri tahu saat rekaman baru menunggu review." else "Beri tahu saat bacaan disetujui atau perlu diulang.",
+                if (parent) "Beri tahu saat ada bacaan baru untuk diperiksa." else "Beri tahu saat bacaan disetujui atau perlu diulang.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
