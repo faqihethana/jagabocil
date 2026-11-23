@@ -202,12 +202,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissPairing() { pairing = null; pairingChild = null }
     fun policy(child: Child, p: Policy) = action {
         api.request("/children/${child.id}/policy", "PUT", api.json.encodeToString(p).toRequestBody("application/json".toMediaType()))
-        load(); message = "Aturan disimpan. Anak perlu merekam ngaji baru."; screen = "home"
+        load(); message = "Aturan disimpan. Anak perlu merekam ngaji baru."; screen = "family"
     }
     fun revoke(id: String) = action { api.request("/children/$id/devices", "DELETE"); load(); message = "Perangkat anak diputus dan izin dicabut." }
     fun review(id: String, approve: Boolean) = action {
         api.request("/recitations/$id/review", "POST", api.body("decision" to if (approve) "approve" else "reject")); load()
         if (screen == "review:$id") { stopPlayback(); screen = "home" }
+        message = if (approve) "Bacaan disetujui. Izin TV sudah tersedia." else "Permintaan untuk membaca ulang sudah dikirim."
     }
     fun openReview(id: String) {
         if (!loggedIn) return
@@ -218,7 +219,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         screen = "review:$id"
         refresh()
     }
-    fun deleteRecording(id: String) = action { stopPlayback(); api.request("/recitations/$id", "DELETE"); load() }
+    fun deleteRecording(id: String) = action {
+        stopPlayback()
+        api.request("/recitations/$id", "DELETE")
+        load()
+        if (screen == "review:$id") screen = "home"
+    }
     fun startRecording() {
         val chapter = dashboard?.children?.firstOrNull()?.surahId?.let(quran::chapter) ?: return
         val maxSeconds = chapter.maxRecordingSeconds
@@ -240,12 +246,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (!recording) return
         ticker?.cancel(); recording = false
         try { recordedFile = recorder.stop() } catch (_: Exception) { recordedFile = null; message = "Rekaman terlalu singkat atau terputus. Yuk, ulangi." }
-    }
-    fun finishAndUpload() {
-        val minimum = dashboard?.children?.firstOrNull()?.minSeconds ?: return
-        if (busy || !recording || seconds < minimum) return
-        finishRecording()
-        if (recordedFile != null) upload()
     }
     fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; recordedSurahId = null; seconds = 0 }
     fun foregrounded() {
