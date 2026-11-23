@@ -1,6 +1,11 @@
 package com.jagabocil.app
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -45,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -74,7 +80,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
             }
         }
     } else {
-        Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+        Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
             QuranHeader("Al-Qur’an", onExit)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !outsideJuz, onClick = { outsideJuz = false }, label = { Text("Juz 30") })
@@ -86,7 +92,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
             }
             LazyColumn(
                 state = list, modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp),
             ) {
                 if (entries.isEmpty()) item { Text("Surah tidak ditemukan.", Modifier.padding(vertical = 16.dp)) }
                 items(entries, key = { it.id }) { entry ->
@@ -114,7 +120,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
         ayahs = library.read(chapter)
         loading = false
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+    Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
         QuranHeader(chapter.name, onBack)
         Text("${chapter.verses} ayat", Modifier.padding(start = 12.dp, bottom = 10.dp))
         val text = ayahs
@@ -183,7 +189,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
 
 @Composable private fun QuranSearch(query: String, onChange: (String) -> Unit) {
     OutlinedTextField(
-        value = query, onValueChange = onChange, label = { Text("Cari nama atau nomor surah") },
+        value = query, onValueChange = onChange, label = { Text("Cari nama atau nomor surah") }, shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth(), singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
@@ -191,13 +197,18 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
 }
 
 @Composable private fun QuranRow(chapter: QuranChapter, status: String?, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = MaterialTheme.colorScheme.surface) {
+    val paper = MaterialTheme.colorScheme.surfaceContainerLowest
+    Surface(onClick = onClick, color = paper, shape = RoundedCornerShape(16.dp)) {
         ListItem(
-            headlineContent = { Text(chapter.name) },
+            headlineContent = { Text(chapter.name, fontWeight = FontWeight.SemiBold) },
             supportingContent = { Text("${chapter.verses} ayat") },
-            leadingContent = { Text(chapter.id) },
-            trailingContent = status?.let { label -> { Text(label, style = MaterialTheme.typography.labelMedium) } },
-            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+            leadingContent = {
+                Box(Modifier.size(40.dp).background(Soft, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                    Text(chapter.id, fontWeight = FontWeight.SemiBold, color = Forest)
+                }
+            },
+            trailingContent = status?.let { label -> { Text(label, color = Muted, style = MaterialTheme.typography.labelMedium) } },
+            colors = ListItemDefaults.colors(containerColor = paper),
         )
     }
 }
@@ -205,7 +216,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
 @Composable private fun QuranHeader(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
-        Text(title, style = MaterialTheme.typography.headlineSmall)
+        SectionTitle(title)
     }
 }
 

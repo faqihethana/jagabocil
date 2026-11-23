@@ -1,0 +1,126 @@
+package com.jagabocil.app
+
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+
+@Composable internal fun ChildHome(vm: AppViewModel, data: Dashboard) {
+    val child = data.children.firstOrNull() ?: return
+    val surah = vm.quran.chapter(child.surahId) ?: return
+    val ayahs = surah.ayahs ?: return
+    val context = LocalContext.current
+    val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.startRecording() else vm.message = "Izinkan mikrofon untuk merekam bacaanmu."
+    }
+    var now by remember { mutableLongStateOf(vm.serverNow()) }
+    LaunchedEffect(Unit) { while (true) { now = vm.serverNow(); delay(1000) } }
+    val step = readingStep(vm.recording, vm.recordedFile != null, data.recitations, now)
+    val last = data.recitations.firstOrNull()
+    val canSetUp = (data.tvSetupUntil ?: 0) > now
+    val tvReady = when {
+        child.awaitsTv -> false
+        child.tvTransport == "infrared" -> vm.infrared.available
+        child.tvPlatform == "wol" -> true
+        else -> vm.tvRemote.paired(child)
+    }
+    fun start() {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.startRecording()
+        else microphone.launch(Manifest.permission.RECORD_AUDIO)
+    }
+    BoxWithConstraints(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 16.dp)) {
+        val inlineControls = maxHeight < 480.dp || LocalDensity.current.fontScale > 1.4f
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    when (step) {
+                        is ReadingStep.Approved -> ReadingBanner(child.name, "Bacaan disetujui", vm.quran.name(step.recitation.surahId))
+                        is ReadingStep.Waiting -> ReadingBanner(child.name, "Menunggu diperiksa", vm.quran.name(step.recitation.surahId))
+                        ReadingStep.Preview -> ReadingBanner(child.name, "Periksa rekamanmu", "${surah.name} · ${vm.seconds} detik")
+                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Tugas ${child.name}", surah.name, "${surah.verses} ayat · Minimal ${child.minSeconds} detik")
+                    }
+                }
+                if (!step.showsVerses || inlineControls) item { ReadingControls(vm, step, child, last, canSetUp, tvReady, ::start) }
+                if (step.showsVerses) {
+                    quranVerses(surah.id, ayahs)
+                    item { QuranAttribution() }
+                }
+            }
+            if (step.showsVerses && !inlineControls) {
+                ReadingControls(vm, step, child, last, canSetUp, tvReady, ::start)
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+    }
+}
+
+@Composable private fun ReadingControls(
+    vm: AppViewModel, step: ReadingStep, child: Child, last: Recitation?,
+    canSetUp: Boolean, tvReady: Boolean, onRecord: () -> Unit,
+) {
+    Surface(color = if (step == ReadingStep.Recording) Soft else Color.White, shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (step) {
+                ReadingStep.Recording -> {
+                    Text("Sedang merekam · %02d:%02d".format(vm.seconds / 60, vm.seconds % 60), style = MaterialTheme.typography.titleMedium)
+                    val remaining = (child.minSeconds - vm.seconds).coerceAtLeast(0)
+                    Text(if (remaining > 0) "Baca setidaknya $remaining detik lagi." else "Selesaikan rekaman setelah ayat terakhir.", color = Muted)
+                    Button(onClick = vm::finishRecording, enabled = !vm.busy && remaining == 0, modifier = Modifier.fillMaxWidth()) { Text("Selesai merekam") }
+                    TextButton(onClick = vm::discardRecording, enabled = !vm.busy) { Text("Batalkan rekaman") }
+                }
+                ReadingStep.Preview -> {
+                    val longEnough = vm.seconds >= child.minSeconds
+                    if (longEnough) {
+                        OutlinedButton(onClick = vm::previewRecording, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (vm.playing == "local") "Hentikan audio" else "Dengarkan rekaman")
+                        }
+                        Button(onClick = vm::upload, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Kirim bacaan") }
+                    } else Text("Rekaman perlu minimal ${child.minSeconds} detik.", color = Amber)
+                    TextButton(onClick = vm::discardRecording, enabled = !vm.busy) { Text("Hapus dan kembali membaca") }
+                }
+                is ReadingStep.Approved -> {
+                    val activePermit = step.recitation
+                    activePermit.expiresAt?.let { Text("Izin berlaku sampai ${time(it)} untuk satu kali menyalakan TV.", color = Muted) }
+                    if (tvReady && child.tvTransport == "infrared") Text("Arahkan ujung HP ke TV.", color = Muted)
+                    val setupHere = canSetUp || !child.awaitsTv && child.tvTransport == "wifi"
+                    Button(onClick = {
+                        if (tvReady) vm.power(activePermit) else vm.screen = if (setupHere) "tv-setup" else "family"
+                    }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (tvReady) "Nyalakan TV" else if (setupHere) "Hubungkan TV" else "Buka panduan TV")
+                    }
+                }
+                is ReadingStep.Waiting -> {
+                    Text(if (child.mode == "ai") "Hasil pemeriksaan akan muncul di sini." else "Ayah atau Ibu akan mendengarkan bacaanmu.", color = Muted)
+                    OutlinedButton(onClick = vm::refresh, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Cek hasil") }
+                }
+                ReadingStep.Read -> {
+                    if (last?.status == "rejected") Text(last.feedback.ifBlank { "Ayah atau Ibu meminta kamu mengulang bacaan." })
+                    Button(onClick = onRecord, enabled = !vm.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Icon(Icons.Outlined.Mic, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (last?.status == "rejected") "Rekam ulang" else "Mulai rekam")
+                    }
+                }
+            }
+            if ((step == ReadingStep.Read || step is ReadingStep.Waiting) && (canSetUp || child.tvTransport == "wifi" && !tvReady)) {
+                TextButton(onClick = { vm.screen = "tv-setup" }, enabled = !vm.busy) { Text(if (canSetUp) "Siapkan TV" else "Hubungkan TV") }
+            }
+        }
+    }
+}
