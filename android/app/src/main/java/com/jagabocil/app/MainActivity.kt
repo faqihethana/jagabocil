@@ -237,14 +237,16 @@ class MainActivity : ComponentActivity() {
                 IconButton(onClick = ::back, enabled = !vm.busy) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
             }
             Brand()
+            if (role == null) {
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { vm.screen = "quran" }) { Text("Baca Al-Qur’an") }
+            }
         }
         if (role == null) {
             ReadingBanner(null, "Ngaji sebelum nonton TV", "Rekam bacaan untuk mendapat izin menyalakan TV keluarga.")
             SectionTitle("Siapa yang memakai HP ini?")
             TaskLink("Orang tua", "Atur tugas dan periksa bacaan anak.", Icons.Outlined.People, Lime) { role = "parent" }
             TaskLink("Aku anak", "Hubungkan HP untuk merekam bacaan.", Icons.Outlined.Mic, Peach) { role = "child" }
-            HorizontalDivider()
-            TaskLink("Baca Al-Qur’an", "Buka daftar surah tanpa masuk.", Icons.AutoMirrored.Outlined.MenuBook) { vm.screen = "quran" }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SectionTitle(if (child) "Hubungkan HP anak" else if (register) "Buat akun orang tua" else "Masuk sebagai orang tua")
