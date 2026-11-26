@@ -27,10 +27,10 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
-private const val DEFAULT_SERVER_URL = "https://jagabocil.onrender.com"
+internal const val SERVER_URL = "https://jagabocil.onrender.com"
 
 class ApiError(val status: Int, message: String) : Exception(message)
-class Api(var baseUrl: String, var token: String = "") {
+class Api(var token: String = "") {
     val json = Json { ignoreUnknownKeys = true }
     private val http = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(65, TimeUnit.SECONDS).callTimeout(75, TimeUnit.SECONDS)
@@ -40,7 +40,7 @@ class Api(var baseUrl: String, var token: String = "") {
     suspend fun request(
         path: String, method: String = "GET", body: RequestBody? = null, authenticated: Boolean = true,
     ): String = withContext(Dispatchers.IO) {
-        val builder = Request.Builder().url(baseUrl.trimEnd('/') + path)
+        val builder = Request.Builder().url(SERVER_URL + path)
             .method(method, body ?: if (method in listOf("POST", "PUT")) "{}".toRequestBody("application/json".toMediaType()) else null)
         if (authenticated && token.isNotBlank()) builder.header("Authorization", "Bearer $token")
         http.newCall(builder.build()).execute().use { response ->
@@ -55,7 +55,7 @@ class Api(var baseUrl: String, var token: String = "") {
         request("/quran/surahs/$id", authenticated = false),
     )
     suspend fun audio(id: String, file: File) = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("${baseUrl.trimEnd('/')}/recitations/$id/audio").header("Authorization", "Bearer $token").build()
+        val request = Request.Builder().url("$SERVER_URL/recitations/$id/audio").header("Authorization", "Bearer $token").build()
         http.newCall(request).execute().use {
             if (!it.isSuccessful) throw ApiError(it.code, "Rekaman belum bisa diputar.")
             it.body?.byteStream()?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
@@ -76,18 +76,20 @@ class SessionStore(context: Context) {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
         }.generateKey()
     }
-    fun save(token: String, baseUrl: String) {
+    fun save(token: String) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         prefs.edit {
             putString("token", Base64.encodeToString(cipher.doFinal(token.toByteArray()), Base64.NO_WRAP))
-            putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)); putString("server", baseUrl)
+            putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            putString("server", SERVER_URL)
         }
     }
     fun token() = runCatching {
+        // A session created against another server cannot be transferred.
+        if (prefs.getString("server", SERVER_URL)?.trimEnd('/') != SERVER_URL) return@runCatching ""
         val encrypted = prefs.getString("token", null) ?: return@runCatching ""
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(prefs.getString("iv", ""), Base64.NO_WRAP))) }
         String(cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP)))
     }.getOrDefault("")
-    fun server() = prefs.getString("server", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_SERVER_URL
-    fun clear() { prefs.edit { remove("token"); remove("iv") } }
+    fun clear() { prefs.edit { remove("token"); remove("iv"); remove("server") } }
 }

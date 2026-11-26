@@ -69,14 +69,13 @@ cd android
 
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
-1. Jalankan API, lalu buka APK pada emulator atau HP.
-2. Instalasi baru otomatis memakai `https://jagabocil.onrender.com`. Untuk backend sendiri, buka **Pengaturan lanjutan** di layar masuk dan isi alamat yang sama pada kedua HP. Emulator Android Studio bisa memakai `http://10.0.2.2:8787` jika API berjalan di komputer yang sama.
-3. Pilih **Orang tua → Daftar**, lalu buat profil anak. Bacaan awalnya Al-Ikhlas dengan pemeriksaan orang tua. Untuk memilih bacaan lain, buka **Ubah aturan**.
-4. Di HP anak, pilih **Aku anak → Pindai QR** dan arahkan kamera ke QR di HP orang tua. Jika perlu, pilih **Masukkan kode angka**. QR dan kode memakai izin sambung sekali pakai yang sama.
-5. Untuk TV Wi-Fi yang belum diatur, buka **Siapkan TV → Cari TV** untuk mencari perangkat yang menyala di Wi-Fi yang sama. Pilih TV, ikuti petunjuk di layar TV, lalu coba **Tes nyalakan TV** dan konfirmasi hasilnya. Satu tes tersedia selama 10 menit setelah HP anak terhubung dan membutuhkan backend yang mendukung alur ini. Untuk konfigurasi dari HP orang tua, pilih **Pilih TV dari HP ini**, atau buka **Ubah aturan → Pengaturan TV lanjutan** untuk infrared, IP manual, atau Wake-on-LAN. Di HP anak, **Panduan** menyediakan pengecekan sambungan.
-6. Di HP anak, pilih **Mulai rekam**, baca surah, lalu ketuk **Selesai merekam**. Dengarkan rekaman bila perlu, lalu pilih **Kirim bacaan**. Ketuk notifikasi di HP orang tua untuk membuka rekaman, atau buka antrean di **Beranda**. Dengarkan, lalu pilih **Setujui** atau **Minta ulang**. Setelah disetujui, HP anak menampilkan **Nyalakan TV** untuk satu kali pemakaian.
+1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`.
+2. Pilih **Orang tua → Daftar**, lalu buat profil anak. Bacaan awalnya Al-Ikhlas dengan pemeriksaan orang tua. Untuk memilih bacaan lain, buka **Ubah aturan**.
+3. Di HP anak, pilih **Aku anak → Pindai QR** dan arahkan kamera ke QR di HP orang tua. Jika perlu, pilih **Masukkan kode angka**. QR dan kode memakai izin sambung sekali pakai yang sama.
+4. Untuk TV Wi-Fi yang belum diatur, buka **Siapkan TV → Cari TV** untuk mencari perangkat yang menyala di Wi-Fi yang sama. Pilih TV, ikuti petunjuk di layar TV, lalu coba **Tes nyalakan TV** dan konfirmasi hasilnya. Satu tes tersedia selama 10 menit setelah HP anak terhubung dan membutuhkan backend yang mendukung alur ini. Untuk konfigurasi dari HP orang tua, pilih **Pilih TV dari HP ini**, atau buka **Ubah aturan → Pengaturan TV lanjutan** untuk infrared, IP manual, atau Wake-on-LAN. Di HP anak, **Panduan** menyediakan pengecekan sambungan.
+5. Di HP anak, pilih **Mulai rekam**, baca surah, lalu ketuk **Selesai merekam**. Dengarkan rekaman bila perlu, lalu pilih **Kirim bacaan**. Ketuk notifikasi di HP orang tua untuk membuka rekaman, atau buka antrean di **Beranda**. Dengarkan, lalu pilih **Setujui** atau **Minta ulang**. Setelah disetujui, HP anak menampilkan **Nyalakan TV** untuk satu kali pemakaian.
 
-HTTP hanya diizinkan untuk loopback/alamat emulator pada build debug. Release memerlukan HTTPS. Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua; satu instalasi menyimpan satu sesi. Distribusi Play Store belum tersedia.
+Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua. Satu instalasi menyimpan satu sesi. Jika versi lama memakai server lain, masuk atau sambungkan kembali HP anak dengan akun pada server resmi. Distribusi Play Store belum tersedia.
 
 Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka pakai ke kolom Username. Nama tampilan dan kata sandi akun lama tetap bisa digunakan.
 
@@ -86,7 +85,7 @@ Build debug menampilkan **Keluarga → JagaBocil Plus Sandbox** untuk akun orang
 
 1. Di dashboard Midtrans, pilih **Sandbox → Settings → Access Keys**. Isi `MIDTRANS_SANDBOX_SERVER_KEY` di `server/.env.local` untuk `npm run dev`, di `.env` root untuk Docker Compose, atau sebagai secret server uji. Untuk PostgreSQL, jalankan `npm run db:migrate` dengan URL direct sebelum menjalankan versi baru.
 2. Untuk menguji webhook, isi `MIDTRANS_PUBLIC_ORIGIN` dengan origin HTTPS publik server uji. Backend mendaftarkan `/billing/midtrans/notify` untuk setiap transaksi dan memakai origin yang sama untuk halaman kembali dari checkout. Untuk uji lokal tanpa URL publik, gunakan **Cek pembayaran** setelah simulasi.
-3. Arahkan APK debug ke server uji, masuk sebagai orang tua, lalu tekan **Uji checkout** di tab **Keluarga**. Buat pembayaran QRIS atau GoPay dan selesaikan dengan [Midtrans Sandbox Simulator](https://simulator.midtrans.com/). Kembali ke aplikasi dan tekan **Cek pembayaran** jika status masih menunggu. Status aktif ditampilkan bersama tanggal berakhirnya.
+3. Untuk menguji dengan backend sendiri, ubah `SERVER_URL` di `Api.kt` pada salinan pengembangan dan kompilasi APK debug. Masuk sebagai orang tua, lalu tekan **Uji checkout** di tab **Keluarga**. Buat pembayaran QRIS atau GoPay dan selesaikan dengan [Midtrans Sandbox Simulator](https://simulator.midtrans.com/). Kembali ke aplikasi dan tekan **Cek pembayaran** jika status masih menunggu. Status aktif ditampilkan bersama tanggal berakhirnya.
 
 ## Privasi dan akses
 

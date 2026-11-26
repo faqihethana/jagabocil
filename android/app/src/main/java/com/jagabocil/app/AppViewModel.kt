@@ -23,7 +23,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SessionStore(application)
-    val api = Api(store.server(), store.token())
+    val api = Api(store.token())
     internal val quran = QuranLibrary(application)
     val infrared = Infrared(application)
     val wifiTv = WifiTv(application)
@@ -77,7 +77,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (e is ApiError && e.status == 401 && loggedIn) clearSession()
                 val error = when (e) {
                     is ApiError -> e.message ?: "Ada kendala. Coba lagi, ya."
-                    is java.io.IOException -> "Server belum bisa dihubungi. Periksa alamat server dan koneksi internet."
+                    is java.io.IOException -> "JagaBocil belum bisa terhubung. Periksa koneksi internet lalu coba lagi."
                     else -> e.message ?: "Ada kendala. Coba lagi, ya."
                 }
                 if (onError == null) message = error else onError(error)
@@ -99,27 +99,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         notifications.clearSession()
     }
     private suspend fun load() {
-        val server = api.baseUrl
         val token = api.token
         val result = api.dashboard()
         clockOffset = result.serverTime - System.currentTimeMillis()
         dashboard = result
         reviewFromNotification?.let { openReview(it) }
-        if (notificationsEnabled) withContext(Dispatchers.IO) { notifications.observe(result, server, token) }
+        if (notificationsEnabled) withContext(Dispatchers.IO) { notifications.observe(result, token) }
     }
     fun refresh() { if (foreground && loggedIn) action { load() } }
-    private fun serverAddress(server: String): String {
-        val uri = server.trim().toUri()
-        require(uri.scheme == "https" || (BuildConfig.DEBUG && uri.scheme == "http" && uri.host in listOf("10.0.2.2", "localhost", "127.0.0.1"))) { "Gunakan alamat HTTPS. Emulator debug boleh memakai http://10.0.2.2:8787." }
-        require(!uri.host.isNullOrBlank() && uri.userInfo == null && uri.query == null && uri.fragment == null) { "Alamat server belum sesuai." }
-        return server.trim().trimEnd('/')
-    }
-    fun authenticate(server: String, username: String, password: String, code: String, child: Boolean, register: Boolean) = action {
-        api.baseUrl = serverAddress(server); api.token = ""
+    fun authenticate(username: String, password: String, code: String, child: Boolean, register: Boolean) = action {
         val body = if (child) api.body("code" to code.trim()) else api.body("username" to username.trim(), "password" to password)
-        val auth = api.json.decodeFromString<Auth>(api.request(if (child) "/pair" else if (register) "/auth/register" else "/auth/login", "POST", body))
+        val auth = api.json.decodeFromString<Auth>(api.request(if (child) "/pair" else if (register) "/auth/register" else "/auth/login", "POST", body, authenticated = false))
         api.token = auth.token
-        store.save(auth.token, api.baseUrl)
+        store.save(auth.token)
         screen = "home"
         load()
         if (child) {
@@ -142,7 +134,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             message = "Izinkan notifikasi JagaBocil di pengaturan Android."
             return
         }
-        notifications.enable(data, api.baseUrl, api.token)
+        notifications.enable(data, api.token)
         notificationsEnabled = true
     }
     fun createRecoveryCode(password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
@@ -175,10 +167,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         (billing.expiresAt ?: 0L) > serverNow() -> "JagaBocil Plus Sandbox aktif."
         else -> "Belum ada pembayaran terkonfirmasi. Mulai checkout jika ingin mencoba lagi."
     }
-    fun recover(server: String, username: String, code: String, password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
-        val recoveryApi = Api(serverAddress(server))
-        recoveryApi.request("/auth/recover", "POST",
-            recoveryApi.body("username" to username, "code" to code, "password" to password))
+    fun recover(username: String, code: String, password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
+        api.request("/auth/recover", "POST",
+            api.body("username" to username, "code" to code, "password" to password), authenticated = false)
         onComplete()
         message = "Kata sandi sudah diganti. Silakan masuk dengan kata sandi baru."
     }

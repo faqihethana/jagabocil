@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -21,8 +23,14 @@ import kotlinx.coroutines.delay
 
 @Composable internal fun ChildHome(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
-    val surah = vm.quran.chapter(child.surahId) ?: return
-    val ayahs = surah.ayahs ?: return
+    val surah = vm.quran.chapter(child.surahId)
+    val ayahs = surah?.ayahs
+    if (surah == null || ayahs == null) {
+        Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.TopCenter) {
+            ReadingBanner(null, "Tugas belum tersedia", "Minta orang tua memeriksa aturan bacaanmu.", accent = Butter)
+        }
+        return
+    }
     val context = LocalContext.current
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.startRecording() else vm.message = "Izinkan mikrofon untuk merekam bacaanmu."
@@ -42,17 +50,20 @@ import kotlinx.coroutines.delay
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.startRecording()
         else microphone.launch(Manifest.permission.RECORD_AUDIO)
     }
-    BoxWithConstraints(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 16.dp)) {
+    BoxWithConstraints(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
         val inlineControls = maxHeight < 480.dp || LocalDensity.current.fontScale > 1.4f
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
+                    if (!vm.recording) SectionTitle("Halo, ${child.name}")
+                    Spacer(Modifier.height(10.dp))
                     when (step) {
-                        is ReadingStep.Approved -> ReadingBanner(child.name, "Bacaan disetujui", vm.quran.name(step.recitation.surahId))
-                        is ReadingStep.Waiting -> ReadingBanner(child.name, "Menunggu diperiksa", vm.quran.name(step.recitation.surahId))
-                        ReadingStep.Preview -> ReadingBanner(child.name, "Periksa rekamanmu", "${surah.name} · ${vm.seconds} detik")
-                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Tugas ${child.name}", surah.name, "${surah.verses} ayat · Minimal ${child.minSeconds} detik")
+                        is ReadingStep.Approved -> ReadingBanner("Izin TV siap", "Bacaan disetujui", vm.quran.name(step.recitation.surahId), Mint, Icons.Outlined.Tv)
+                        is ReadingStep.Waiting -> ReadingBanner(null, "Menunggu diperiksa", vm.quran.name(step.recitation.surahId), Butter, Icons.Outlined.Headphones)
+                        ReadingStep.Preview -> ReadingBanner(null, "Periksa rekamanmu", "${surah.name} · ${vm.seconds} detik", Rose, Icons.Outlined.Headphones)
+                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Tugas ngaji", surah.name,
+                            "${surah.verses} ayat · Rekam minimal ${child.minSeconds} detik", Sky)
                     }
                 }
                 if (!step.showsVerses || inlineControls) item { ReadingControls(vm, step, child, last, canSetUp, tvReady, ::start) }
@@ -73,7 +84,13 @@ import kotlinx.coroutines.delay
     vm: AppViewModel, step: ReadingStep, child: Child, last: Recitation?,
     canSetUp: Boolean, tvReady: Boolean, onRecord: () -> Unit,
 ) {
-    Surface(color = if (step == ReadingStep.Recording) Soft else Color.White, shape = RoundedCornerShape(20.dp),
+    val color = when (step) {
+        ReadingStep.Recording -> Rose
+        is ReadingStep.Waiting -> Butter
+        is ReadingStep.Approved -> Mint
+        else -> MaterialTheme.colorScheme.surfaceContainerLowest
+    }
+    Surface(color = color, shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (step) {

@@ -94,7 +94,11 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
                 state = list, modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp),
             ) {
-                if (entries.isEmpty()) item { Text("Surah tidak ditemukan.", Modifier.padding(vertical = 16.dp)) }
+                if (entries.isEmpty()) item {
+                    Surface(color = Butter, shape = MaterialTheme.shapes.large) {
+                        Text("Surah tidak ditemukan. Coba nama atau nomor lain.", Modifier.fillMaxWidth().padding(16.dp))
+                    }
+                }
                 items(entries, key = { it.id }) { entry ->
                     val status = when {
                         entry.ayahs != null -> "Luring"
@@ -203,7 +207,12 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
             headlineContent = { Text(chapter.name, fontWeight = FontWeight.SemiBold) },
             supportingContent = { Text("${chapter.verses} ayat") },
             leadingContent = {
-                Box(Modifier.size(40.dp).background(Soft, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                val accent = when (status) {
+                    "Perlu diunduh" -> Sky
+                    "Tersimpan", "Dipilih" -> Mint
+                    else -> Butter
+                }
+                Box(Modifier.size(42.dp).background(accent, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
                     Text(chapter.id, fontWeight = FontWeight.SemiBold, color = Forest)
                 }
             },
@@ -238,7 +247,10 @@ internal fun LazyListScope.quranVerses(id: String, ayahs: List<String>) {
         shape = MaterialTheme.shapes.large,
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.Top) {
-            Text(number.toString(), Modifier.padding(top = 11.dp, end = 12.dp), style = MaterialTheme.typography.labelMedium)
+            Box(Modifier.padding(top = 5.dp, end = 12.dp).size(30.dp).background(Mint, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center) {
+                Text(number.toString(), color = Forest, style = MaterialTheme.typography.labelMedium)
+            }
             ArabicText(ayah, Modifier.weight(1f), TextAlign.Right)
         }
     }

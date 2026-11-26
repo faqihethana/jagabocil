@@ -47,8 +47,8 @@ internal class ReviewNotifications(context: Context) {
     fun permitted() = manager.areNotificationsEnabled() &&
         manager.getNotificationChannel(CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE
 
-    fun enable(data: Dashboard, server: String, token: String) = synchronized(lock) {
-        seed(sessionKey(server, token), data.serverTime)
+    fun enable(data: Dashboard, token: String) = synchronized(lock) {
+        seed(sessionKey(token), data.serverTime)
         prefs.edit { putBoolean("enabled", true) }
         schedule()
     }
@@ -73,9 +73,9 @@ internal class ReviewNotifications(context: Context) {
         WorkManager.getInstance(app).enqueueUniquePeriodicWork(CHANNEL, ExistingPeriodicWorkPolicy.KEEP, request)
     }
 
-    fun observe(data: Dashboard, server: String, token: String) = synchronized(lock) {
-        if (!enabled || !permitted() || token.isBlank() || sessions.token() != token || sessions.server() != server) return@synchronized
-        val account = sessionKey(server, token)
+    fun observe(data: Dashboard, token: String) = synchronized(lock) {
+        if (!enabled || !permitted() || token.isBlank() || sessions.token() != token) return@synchronized
+        val account = sessionKey(token)
         if (prefs.getString("account", null) != account) {
             seed(account, data.serverTime)
             return@synchronized
@@ -96,8 +96,8 @@ internal class ReviewNotifications(context: Context) {
         prefs.edit { putString("account", account); putLong("after", after); remove("seen") }
     }
 
-    private fun sessionKey(server: String, token: String) =
-        MessageDigest.getInstance("SHA-256").digest("$server\n$token".toByteArray()).joinToString("") { "%02x".format(it) }
+    private fun sessionKey(token: String) =
+        MessageDigest.getInstance("SHA-256").digest("$SERVER_URL\n$token".toByteArray()).joinToString("") { "%02x".format(it) }
 
     @SuppressLint("MissingPermission")
     private fun post(notice: ReviewNotice): Boolean {
@@ -142,9 +142,8 @@ class ReviewNotificationWorker(context: Context, params: WorkerParameters) : Cor
         val store = SessionStore(applicationContext)
         val token = store.token()
         if (token.isBlank() || !notifications.enabled || !notifications.permitted()) return Result.success()
-        val server = store.server()
         return try {
-            notifications.observe(Api(server, token).dashboard(), server, token)
+            notifications.observe(Api(token).dashboard(), token)
             Result.success()
         } catch (error: ApiError) {
             if (error.status == 429 || error.status >= 500) Result.retry() else Result.success()

@@ -156,7 +156,6 @@ import java.util.Locale
 
 @Composable internal fun RecoverAccountDialog(
     vm: AppViewModel,
-    server: String,
     initialUsername: String,
     onDismiss: () -> Unit,
     onRecovered: (String) -> Unit,
@@ -186,8 +185,8 @@ import java.util.Locale
             }
         },
         confirmButton = {
-            TextButton(onClick = { vm.recover(server, username.trim(), code, password, onError = { error = it }, onComplete = { onRecovered(username.trim()) }) },
-                enabled = !vm.busy && server.isNotBlank() && username.isNotBlank() && code.count { it != '-' } == 32 &&
+            TextButton(onClick = { vm.recover(username.trim(), code, password, onError = { error = it }, onComplete = { onRecovered(username.trim()) }) },
+                enabled = !vm.busy && username.isNotBlank() && code.count { it != '-' } == 32 &&
                     password.length in 4..128 && password == confirm) { Text("Ganti kata sandi") }
         },
         dismissButton = { TextButton(onClick = dismiss, enabled = !vm.busy) { Text("Batal") } },
