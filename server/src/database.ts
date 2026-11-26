@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 7;
+const schemaVersion = 8;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -110,6 +110,12 @@ export const migration = (schema: string) => {
         id TEXT PRIMARY KEY, child_id TEXT NOT NULL REFERENCES ${s}.children(id) ON DELETE CASCADE,
         template_id TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL, UNIQUE(child_id,template_id)
       );
+      INSERT INTO ${s}.schema_migrations(version) VALUES(7) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS reading_assignment TEXT NOT NULL DEFAULT 'free';
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

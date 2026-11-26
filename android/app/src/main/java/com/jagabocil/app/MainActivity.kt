@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
     androidx.activity.compose.BackHandler(enabled = vm.screen in listOf("quran", "books") || vm.dashboard != null && (vm.screen != "home" || recordingInProgress)) {
         when {
             vm.screen == "tv-setup" -> if (!vm.busy) vm.leaveTvSetup()
+            vm.screen.startsWith("reading-task:") -> if (!vm.busy) vm.screen = vm.screen.split(':')[1]
             vm.screen.startsWith("settings:") -> vm.screen = "family"
             vm.screen.startsWith("review:") -> { vm.stopPlayback(); vm.screen = "home" }
             recordingInProgress -> vm.message = "Selesaikan atau hapus rekaman dulu, ya."
@@ -147,6 +148,14 @@ class MainActivity : ComponentActivity() {
                 }
                 vm.screen == "tv-setup" && data.role == "child" -> TvSetupScreen(vm, data)
                 vm.screen.startsWith("review:") && data.role == "parent" -> ReviewScreen(vm, data)
+                vm.screen.startsWith("reading-task:") && data.role == "parent" -> {
+                    val route = vm.screen
+                    val child = data.children.find { it.id == route.substringAfterLast(':') }
+                    val back = { vm.screen = route.split(':')[1] }
+                    if (child != null && data.readingAssignments) {
+                        key(child.id) { ReadingTaskScreen(vm, child, back) }
+                    } else LaunchedEffect(route) { back() }
+                }
                 vm.screen.startsWith("settings:") -> {
                     val child = data.children.find { it.id == vm.screen.substringAfter(':') }
                     if (child != null) SettingsScreen(vm, data, child)
@@ -233,7 +242,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Column(Modifier.padding(top = extraSpace * 0.23f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     TaskLink("Orang tua", "Atur tugas dan periksa bacaan.", Icons.Outlined.People, Mint) { role = "parent" }
-                    TaskLink("Aku anak", "Masuk dan pilih bacaanmu.", Icons.Outlined.Mic, Sky) { role = "child" }
+                    TaskLink("Aku anak", "Masuk dan mulai membaca.", Icons.Outlined.Mic, Sky) { role = "child" }
                 }
             } else {
                 ReadingBanner(
@@ -294,7 +303,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun ParentHome(vm: AppViewModel, data: Dashboard) {
     val pending = data.recitations.filter { it.status == "pending" }
     if (data.children.isEmpty()) {
-        ReadingBanner(null, "Buat akun anak", "Anak memakai akun ini untuk memilih bacaan dan TV.",
+        ReadingBanner(null, "Buat akun anak", "Setelah akun siap, kamu bisa memilih tugas bacaan untuk anak.",
             accent = Peach, illustrated = true)
         AddChild(vm)
         return
@@ -314,6 +323,17 @@ class MainActivity : ComponentActivity() {
                 TaskLink("${child?.name ?: "Anak"} · ${rec.readingTitle(vm.quran)}",
                     "${time(rec.createdAt)} · ${rec.duration.roundToInt()} detik", Icons.Outlined.Headphones, Rose) {
                     vm.openReview(rec.id)
+                }
+            }
+        }
+    }
+    if (data.readingAssignments) {
+        SectionTitle("Tugas bacaan")
+        data.children.forEach { child ->
+            key(child.id) {
+                TaskLink("Atur bacaan ${child.name}", child.readingTaskTitle(vm.quran),
+                    Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = !vm.busy) {
+                    vm.screen = "reading-task:home:${child.id}"
                 }
             }
         }
@@ -397,7 +417,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun Family(vm: AppViewModel, data: Dashboard) {
     var adding by rememberSaveable { mutableStateOf(false) }
     ReadingBanner(null, "Akun anak", "Kelola login anak dan aturan pemeriksaan bacaan.", Mint, Icons.Outlined.People)
-    data.children.forEach { child -> key(child.id) { ChildCard(vm, child) } }
+    data.children.forEach { child -> key(child.id) { ChildCard(vm, child, data.readingAssignments) } }
     if (adding || data.children.isEmpty()) AddChild(vm) { adding = false }
     else OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("Tambah akun anak") }
     SectionTitle("Pengaturan akun")
@@ -406,7 +426,7 @@ class MainActivity : ComponentActivity() {
     if (BuildConfig.DEBUG) data.billing?.let { BillingSetting(vm, it) }
 }
 
-@Composable private fun ChildCard(vm: AppViewModel, child: Child) {
+@Composable private fun ChildCard(vm: AppViewModel, child: Child, readingAssignments: Boolean) {
     var editingAccount by remember(child.id) { mutableStateOf(false) }
     Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -418,6 +438,12 @@ class MainActivity : ComponentActivity() {
                     Text(child.username?.let { "@$it" } ?: "Login belum disiapkan", color = Muted, fontSize = 12.sp)
                 }
                 TextButton(onClick = { vm.screen = "settings:${child.id}" }) { Text("Ubah aturan") }
+            }
+            if (readingAssignments) {
+                TaskLink("Tugas bacaan", child.readingTaskTitle(vm.quran),
+                    Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = !vm.busy) {
+                    vm.screen = "reading-task:family:${child.id}"
+                }
             }
             OutlinedButton(onClick = { editingAccount = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
                 Text(if (child.username == null) "Siapkan login anak" else "Ubah login anak")
@@ -494,8 +520,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        TaskLink("Surah awal", vm.quran.chapter(surah)?.let { "${it.name} · Anak bisa pilih surah lain" }.orEmpty(),
-            Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = taskSurahs.isNotEmpty()) { showSurahs = true }
+        if (!data.readingAssignments) {
+            TaskLink("Surah awal", vm.quran.chapter(surah)?.let { "${it.name} · Anak bisa pilih surah lain" }.orEmpty(),
+                Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = taskSurahs.isNotEmpty()) { showSurahs = true }
+        }
         Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SectionTitle("Durasi bacaan dan izin")

@@ -10,14 +10,21 @@ import kotlinx.serialization.Serializable
 )
 @Serializable internal data class GeneratedStories(val books: List<Story>)
 @Serializable internal data class GeneratedStory(val book: Story)
+@Serializable data class BookReading(val title: String, val text: String)
 @Serializable data class Child(
     val id: String, val name: String, val mode: String, val surahId: String,
     val minSeconds: Int, val unlockMinutes: Int, val tvBrand: String, val aiConsent: Boolean,
     val tvTransport: String = "infrared", val tvMac: String = "",
     val tvPlatform: String = "wol", val tvHost: String = "",
     val username: String? = null, val tvRevision: Int? = null,
+    val readingAssignment: String = "free", val bookReading: BookReading? = null,
 ) {
     val awaitsTv get() = tvTransport == "infrared" && tvBrand == "none"
+}
+internal fun Child.readingTaskTitle(quran: QuranLibrary): String = when (readingAssignment) {
+    "quran" -> "Ngaji · ${quran.name(surahId)}"
+    "book" -> bookReading?.let { "Baca buku · ${it.title}" } ?: "Baca buku"
+    else -> "Anak pilih sendiri"
 }
 @Serializable data class Recitation(
     val id: String, val childId: String, val surahId: String, val status: String,
@@ -43,6 +50,7 @@ internal fun Recitation.readingTitle(quran: QuranLibrary) =
     val billing: Billing? = null,
     val readingActivities: Boolean = false,
     val bookLibrary: Boolean = false, val storyGeneration: Boolean = false,
+    val readingAssignments: Boolean = false,
 )
 @Serializable data class UploadedRecitation(val recitation: Recitation)
 @Serializable data class Billing(val amount: Int, val days: Int, val expiresAt: Long?, val pending: Boolean)

@@ -7,7 +7,7 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 ## Yang sudah tersedia
 
 - Orang tua membuat akun anak dari menu **Keluarga**. Anak masuk dengan username dan kata sandinya sendiri. Username baru terdiri dari 3–32 karakter, dengan kata sandi minimal 4 karakter.
-- Anak memilih sendiri salah satu dari 37 surah Juz 30 sebelum merekam. Layar bacaan menampilkan teks Arab per ayat, perekam, dan pratinjau audio.
+- Orang tua membuka **Beranda → Atur bacaan** untuk memilih satu surah Juz 30, cerita dari **Rak Buku**, atau teks sendiri. Bacaan langsung menjadi tugas di Beranda anak sampai orang tua menggantinya. Opsi **Anak pilih sendiri** memberi anak pilihan surah atau cerita sebelum merekam.
 - **Rak Buku** menyediakan 24 cerita pendek dalam tema hewan, alam, sehari-hari, dan persahabatan. Cerita bawaan bisa dibuka tanpa login atau internet. Anak yang sudah masuk bisa membuat satu versi AI per template. Versi tersebut disimpan di akun anak dan bisa dipakai untuk tugas baca.
 - Menu **Al-Qur’an** dapat dibuka sebelum masuk. Juz 30 ikut di dalam APK. Untuk 77 surah lainnya, pilih surah dan tekan **Unduh surah**. Teks yang sudah diunduh tersimpan per HP dan dapat dibaca lagi tanpa internet.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
@@ -72,11 +72,12 @@ cd android
 
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
-1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Versi AI dan pemilihan cerita dari Rak Buku untuk tugas baca memerlukan API terbaru dan schema PostgreSQL versi 7.
+1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Penetapan tugas oleh orang tua memerlukan aplikasi dan API terbaru serta schema PostgreSQL versi 8.
 2. Masuk sebagai **Orang tua** dan buat akun anak. Untuk profil lama, buka **Keluarga → Siapkan login anak** agar profil dan riwayat tetap dipakai.
-3. Di HP anak, pilih **Aku anak** dan masukkan username serta kata sandi anak. Pilih **Ngaji** untuk memilih surah Juz 30 atau **Baca buku** untuk membuka Rak Buku. Pilih cerita, buat versi AI jika ingin, lalu tekan **Pakai untuk izin TV**. Rekam, dengarkan bila perlu, lalu pilih **Kirim bacaan**.
-4. Di HP orang tua, buka bacaan dari antrean **Beranda** atau notifikasi. Baca transkripsi atau putar audio, lalu pilih **Setujui** atau **Minta ulang**.
-5. Di HP anak, pilih perangkat dari **TV saya → Cari TV di Wi-Fi**. Ikuti petunjuk di layar TV bila diminta. Anak juga bisa mengatur TV sebelum mengirim bacaan. Setelah rekaman disetujui, tombol **Nyalakan TV** menggunakan izin satu kali.
+3. Di HP orang tua, ketuk **Atur bacaan** di Beranda. Pilih **Ngaji** atau **Baca buku**, tentukan bacaannya, lalu ketuk **Simpan tugas**.
+4. Di HP anak, masuk lewat **Aku anak**. Bacaan dari orang tua langsung tampil di Beranda. Jika orang tua mengaktifkan **Anak pilih sendiri**, anak bisa memilih surah atau memakai cerita dari Rak Buku dengan tombol **Pakai untuk izin TV**. Rekam, dengarkan bila perlu, lalu pilih **Kirim bacaan**.
+5. Di HP orang tua, buka bacaan dari antrean **Beranda** atau notifikasi. Baca transkripsi atau putar audio, lalu pilih **Setujui** atau **Minta ulang**.
+6. Di HP anak, pilih perangkat dari **TV saya → Cari TV di Wi-Fi**. Ikuti petunjuk di layar TV bila diminta. Anak juga bisa mengatur TV sebelum mengirim bacaan. Setelah rekaman disetujui, tombol **Nyalakan TV** menggunakan izin satu kali.
 
 Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua. Satu instalasi menyimpan satu sesi. Setelah login anak disiapkan atau diganti, masuk kembali di HP anak. Distribusi Play Store belum tersedia.
 

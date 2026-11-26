@@ -51,6 +51,7 @@ export function sqliteDatabase(path: string): Database {
     if (!columns.has('account_revision')) db.exec('ALTER TABLE children ADD COLUMN account_revision INTEGER NOT NULL DEFAULT 0');
     if (!columns.has('book_title')) db.exec("ALTER TABLE children ADD COLUMN book_title TEXT NOT NULL DEFAULT ''");
     if (!columns.has('book_text')) db.exec("ALTER TABLE children ADD COLUMN book_text TEXT NOT NULL DEFAULT ''");
+    if (!columns.has('reading_assignment')) db.exec("ALTER TABLE children ADD COLUMN reading_assignment TEXT NOT NULL DEFAULT 'free'");
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS children_username ON children(username) WHERE username IS NOT NULL');
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }

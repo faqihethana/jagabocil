@@ -25,21 +25,17 @@ import kotlinx.coroutines.delay
 
 @Composable internal fun ChildHome(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
-    val book = vm.selectedBook
-    val readingBook = data.bookLibrary && vm.readingBook
-    val surah = vm.quran.chapter(vm.selectedSurahId ?: child.surahId)
+    val assigned = child.readingAssignment != "free"
+    val readingBook = child.readingAssignment == "book" || (!assigned && data.bookLibrary && vm.readingBook)
+    val bookTitle = if (assigned) child.bookReading?.title else vm.selectedBook?.title
+    val bookText = if (assigned) child.bookReading?.text else vm.selectedBook?.text
+    val surah = vm.quran.chapter(if (assigned) child.surahId else vm.selectedSurahId ?: child.surahId)
     val ayahs = surah?.ayahs
-    if (surah == null || ayahs == null) {
-        Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.TopCenter) {
-            ReadingBanner(null, "Bacaan belum tersedia", "Coba muat ulang dari menu akun.", accent = Butter)
-        }
-        return
-    }
     val context = LocalContext.current
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.startRecording() else vm.message = "Izinkan mikrofon untuk merekam bacaanmu."
     }
-    var showSurahs by rememberSaveable { mutableStateOf(false) }
+    var showSurahs by rememberSaveable(assigned) { mutableStateOf(false) }
     var expiryClock by remember { mutableLongStateOf(vm.serverNow()) }
     LaunchedEffect(data.recitations) {
         while (true) {
@@ -50,8 +46,8 @@ import kotlinx.coroutines.delay
     }
     val step = readingStep(vm.recording, vm.recordedFile != null, data.recitations, maxOf(expiryClock, vm.serverNow()))
     val last = data.recitations.firstOrNull()
-    val readingTitle = if (readingBook) book?.title ?: "Baca buku" else surah.name
-    val canRecord = !readingBook || book != null
+    val readingTitle = if (readingBook) bookTitle ?: "Baca buku" else surah?.name ?: "Bacaan belum tersedia"
+    val canRecord = if (readingBook) bookText != null else ayahs != null
     val tvReady = when {
         child.awaitsTv -> false
         child.tvTransport == "infrared" -> vm.infrared.available
@@ -73,21 +69,22 @@ import kotlinx.coroutines.delay
                         is ReadingStep.Approved -> ReadingBanner("Izin TV siap", "Bacaan disetujui", step.recitation.readingTitle(vm.quran), Mint, Icons.Outlined.Tv)
                         is ReadingStep.Waiting -> ReadingBanner(null, "Menunggu diperiksa", step.recitation.readingTitle(vm.quran), Butter, Icons.Outlined.Headphones)
                         ReadingStep.Preview -> ReadingBanner(null, "Periksa rekamanmu", "$readingTitle · ${vm.seconds} detik", Rose, Icons.Outlined.Headphones)
-                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Bacaan untuk izin TV", readingTitle,
+                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner(
+                            if (assigned) "Tugas dari orang tua" else "Bacaan untuk izin TV", readingTitle,
                             when {
-                                !canRecord -> "Pilih cerita yang ingin kamu baca."
+                                !canRecord -> if (assigned || !readingBook) "Coba perbarui dari menu akun." else "Pilih cerita yang ingin kamu baca."
                                 readingBook -> "Baca cerita dan rekam minimal ${child.minSeconds} detik."
-                                else -> "${surah.verses} ayat · Rekam minimal ${child.minSeconds} detik"
+                                else -> "${surah?.verses} ayat · Rekam minimal ${child.minSeconds} detik"
                             }, Sky)
                     }
                 }
-                if (step == ReadingStep.Read && data.bookLibrary) item {
+                if (step == ReadingStep.Read && !assigned && data.bookLibrary) item {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         FilterChip(selected = !readingBook, onClick = { vm.selectReading(false) }, label = { Text("Ngaji") })
                         FilterChip(selected = readingBook, onClick = { if (!vm.busy) vm.screen = "books" }, label = { Text("Baca buku") })
                     }
                 }
-                if (step == ReadingStep.Read && !readingBook) item {
+                if (step == ReadingStep.Read && !assigned && !readingBook) item {
                     TaskLink("Pilih surah", "Pilih bacaan dari Juz 30.", Icons.AutoMirrored.Outlined.MenuBook,
                         Sky, enabled = !vm.busy) { showSurahs = true }
                 }
@@ -96,8 +93,8 @@ import kotlinx.coroutines.delay
                 }
                 if (step.showsVerses) {
                     if (readingBook) {
-                        if (book != null) item { StoryBody(book.text) }
-                    } else {
+                        if (bookText != null) item { StoryBody(bookText) }
+                    } else if (surah != null && ayahs != null) {
                         quranVerses(surah.id, ayahs)
                         item { QuranAttribution() }
                     }
@@ -109,7 +106,7 @@ import kotlinx.coroutines.delay
             }
         }
     }
-    if (showSurahs) QuranTaskPicker(vm.quran.juz30, surah.id, { showSurahs = false }) {
+    if (showSurahs && !assigned) QuranTaskPicker(vm.quran.juz30, surah?.id.orEmpty(), { showSurahs = false }) {
         vm.selectSurah(it)
         showSurahs = false
     }

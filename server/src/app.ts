@@ -37,7 +37,7 @@ function isPrivateIpv4(host: string) {
 }
 type TokenRole = 'parent' | 'child' | 'child_account';
 type Actor = { role: 'parent' | 'child'; accountLogin: boolean; id: string; authRevision: number; tokenHash: string; expires: number };
-type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null; book_title: string; book_text: string };
+type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null; book_title: string; book_text: string; reading_assignment: 'free' | 'quran' | 'book' };
 type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null; reading_kind: 'quran' | 'book'; book_title: string | null; reference_text: string | null; transcript: string | null; match_score: number | null; transcript_available?: boolean | number };
 // Values 1 and 2 covered sending audio without keeping transcripts.
 const aiConsentByProvider = { gemini: 3, deepseek: 4 } as const;
@@ -131,7 +131,7 @@ export async function createApp(options: Options) {
     return rec;
   }
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
-  const publicChild = (c: Child, extended = true) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c), bookReading: extended && c.book_title ? { title: c.book_title, text: c.book_text } : undefined });
+  const publicChild = (c: Child, extended = true) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c), readingAssignment: c.reading_assignment, bookReading: extended && c.book_title ? { title: c.book_title, text: c.book_text } : undefined });
   const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer, readingKind: r.reading_kind, bookTitle: r.book_title, hasTranscript: Boolean(r.transcript_available ?? r.transcript) });
   const awaitingTv = (c: Child) => c.tv_transport === 'infrared' && c.tv_brand === 'none';
   // The capability belongs to a recently paired device and the policy revision it received.
@@ -301,10 +301,43 @@ export async function createApp(options: Options) {
     }
     const consent = p.mode === 'ai' && aiProvider ? aiConsentByProvider[aiProvider] : 0;
     await db.batch([
-      { sql: 'UPDATE children SET mode=?,surah_id=?,min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,book_title=COALESCE(?,book_title),book_text=COALESCE(?,book_text),revision=revision+1 WHERE id=?', values: [p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, consent, p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, book?.title ?? null, book?.text ?? null, c.id] },
+      { sql: `UPDATE children SET mode=?,surah_id=CASE WHEN reading_assignment='quran' THEN surah_id ELSE ? END,
+        min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,
+        book_title=CASE WHEN reading_assignment='book' THEN book_title ELSE COALESCE(?,book_title) END,
+        book_text=CASE WHEN reading_assignment='book' THEN book_text ELSE COALESCE(?,book_text) END,
+        revision=revision+1 WHERE id=?`, values: [p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, consent, p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, book?.title ?? null, book?.text ?? null, c.id] },
       { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Aturan diperbarui. Yuk, rekam bacaan baru.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
     ]);
     return { child: publicChild((await childFor(a, c.id)), true) };
+  });
+  app.put('/children/:id/reading-task', async req => {
+    const a = await actor(req, 'parent');
+    const child = await childFor(a, paramId(req));
+    const task = z.union([
+      z.object({ kind: z.literal('free') }),
+      z.object({ kind: z.literal('quran'), surahId: z.string().refine(isTaskSurah) }),
+      z.object({ kind: z.literal('book'), bookId: z.string().min(1).max(80) }),
+      z.object({ kind: z.literal('book'), title: z.string().trim().min(1).max(80), text: z.string().trim().max(1600) }),
+    ]).parse(req.body);
+    let book: { title: string; text: string } | undefined;
+    if (task.kind === 'book') {
+      book = 'bookId' in task ? bookTemplates.get(task.bookId) : task;
+      if (!book) return fail(404, 'Cerita tidak ditemukan di Rak Buku.');
+      if (readingWords(book.text).length < 8) return fail(400, 'Masukkan kutipan dengan minimal 8 kata.');
+    }
+    const surahId = task.kind === 'quran' ? task.surahId : null;
+    if (task.kind === child.reading_assignment && (surahId === null || surahId === child.surah_id) &&
+      (!book || (book.title === child.book_title && book.text === child.book_text))) {
+      return { child: publicChild(child) };
+    }
+    await db.batch([
+      { sql: `UPDATE children SET reading_assignment=?,surah_id=COALESCE(?,surah_id),
+        book_title=COALESCE(?,CASE WHEN reading_assignment='book' THEN '' ELSE book_title END),
+        book_text=COALESCE(?,CASE WHEN reading_assignment='book' THEN '' ELSE book_text END),
+        revision=revision+1 WHERE id=?`, values: [task.kind, surahId, book?.title ?? null, book?.text ?? null, child.id] },
+      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Tugas bacaan diganti. Yuk, baca tugas barumu.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [child.id] },
+    ]);
+    return { child: publicChild(await childFor(a, child.id)) };
   });
   app.get('/dashboard', async req => {
     const a = await actor(req);
@@ -323,7 +356,7 @@ export async function createApp(options: Options) {
     const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
     const firstChild = children[0];
     const setup = a.role === 'child' && !a.accountLogin && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, bookLibrary: true, storyGeneration: Boolean(options.writeStory), quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, readingAssignments: true, bookLibrary: true, storyGeneration: Boolean(options.writeStory), quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
   });
   app.get('/books/generated', async req => {
     const a = await actor(req, 'child');
@@ -362,9 +395,15 @@ export async function createApp(options: Options) {
     const isBook = query.kind === 'book';
     const selfSelected = query.selection === 'self';
     if (!buffer?.length) return fail(400, 'Sertakan rekaman bacaanmu.');
+    if ((isBook || c.reading_assignment !== 'free' || query.revision !== undefined) && query.revision !== String(c.revision)) {
+      return fail(409, 'Aturan bacaan diperbarui. Muat ulang lalu rekam ulang.');
+    }
+    if (c.reading_assignment === 'quran' && (isBook || surahId !== c.surah_id) ||
+        c.reading_assignment === 'book' && (!isBook || query.bookId !== undefined)) {
+      return fail(400, 'Kirim rekaman sesuai tugas dari orang tua.');
+    }
     let book: { title: string; text: string } | undefined;
     if (isBook) {
-      if (query.revision !== String(c.revision)) return fail(409, 'Aturan bacaan diperbarui. Muat ulang lalu rekam ulang.');
       if (query.bookId !== undefined) {
         const { bookId } = z.object({ bookId: z.string().min(1).max(80) }).parse(query);
         book = bookTemplates.get(bookId)
@@ -404,7 +443,9 @@ export async function createApp(options: Options) {
       app.log.error({ err: error }, 'Recording storage failed');
       return fail(503, 'Rekaman belum tersimpan. Coba kirim lagi sebentar.');
     }
-    const ready = await change("UPDATE recitations SET status='pending',ready_at=? WHERE id=? AND status='uploading' AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=?)", now(), id, c.id, c.revision);
+    const policyLock = db.kind === 'postgres' ? ' FOR UPDATE' : '';
+    const ready = await change(`UPDATE recitations SET status='pending',ready_at=? WHERE id=? AND status='uploading'
+      AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=?${policyLock})`, now(), id, c.id, c.revision);
     if (!ready.changes) {
       await recordings.remove(reference);
       await change('DELETE FROM recitations WHERE id=?', id);

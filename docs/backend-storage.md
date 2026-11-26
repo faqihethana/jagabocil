@@ -51,7 +51,7 @@ npm run db:migrate
 node --use-env-proxy --env-file=.env.production.local dist/migrate.js
 ```
 
-Jalankan migrasi versi 7 sebelum memulai backend dengan Rak Buku. Migrasi menambahkan tabel versi cerita AI dengan satu cerita tersimpan per template dan akun anak. Rekaman menyimpan salinan teks yang dipakai saat upload. Runtime normal memeriksa versi schema. `DATABASE_AUTO_MIGRATE=true` tersedia untuk setup yang sengaja menjalankan migrasi saat startup. Pada host yang menyuntikkan environment, jalankan `node --use-env-proxy dist/migrate.js` untuk migrasi dan `node --use-env-proxy dist/index.js` untuk API. Dockerfile memakai flag yang sama.
+Jalankan migrasi versi 8 sebelum memulai backend dengan penetapan tugas bacaan. Profil lama tetap memakai mode **Anak pilih sendiri** sampai orang tua menetapkan tugas. Rekaman buku menyimpan salinan teks yang dipakai saat upload. Runtime normal memeriksa versi schema. `DATABASE_AUTO_MIGRATE=true` tersedia untuk setup yang sengaja menjalankan migrasi saat startup. Pada host yang menyuntikkan environment, jalankan `node --use-env-proxy dist/migrate.js` untuk migrasi dan `node --use-env-proxy dist/index.js` untuk API. Dockerfile memakai flag yang sama.
 
 Neon menggunakan driver HTTP melalui HTTPS; Postgres biasa/lokal memakai pool `pg`. Semua tabel aplikasi diberi nama schema secara eksplisit, sehingga tidak bergantung pada `search_path` dari koneksi pool. Pairing dikonsumsi atomik, izin power tetap satu SQL update, dan perubahan aturan/pencabutan perangkat memakai transaksi.
 

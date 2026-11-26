@@ -605,3 +605,75 @@ test('children can record catalog books and private AI variants without a parent
     assert.equal(details.matchScore, 100);
   }
 });
+
+test('a parent can assign a surah or book and only the current reading can earn TV permission', async () => {
+  const taskRequest = (method: 'GET' | 'POST' | 'PUT', url: string, token = '', payload?: unknown) => app.inject({
+    method, url, remoteAddress: '127.0.0.5', headers: token ? { authorization: `Bearer ${token}` } : {}, payload,
+  });
+  const credentials = { username: 'TugasBacaan', password: 'abcd' };
+  const created = await taskRequest('POST', '/children/accounts', parent, { ...credentials, name: 'Tugas Bacaan' });
+  assert.equal(created.statusCode, 201);
+  const profile = created.json().child;
+  assert.equal(profile.readingAssignment, 'free');
+  const token = (await taskRequest('POST', '/auth/child/login', '', credentials)).json().token;
+  const path = `/children/${profile.id}/reading-task`;
+  const assign = (task: unknown) => taskRequest('PUT', path, parent, task);
+  const dashboard = async () => (await taskRequest('GET', '/dashboard?reading=extended', token)).json();
+  const submit = (query: string, surahId = '') => {
+    const data = multipart(wav(16), surahId);
+    return app.inject({
+      method: 'POST', url: `/recitations?${query}`, remoteAddress: '127.0.0.5',
+      headers: { ...data.headers, authorization: `Bearer ${token}` }, payload: data.payload,
+    });
+  };
+
+  const quran = { kind: 'quran', surahId: '114' };
+  const otherParent = (await taskRequest('POST', '/auth/login', '', { username: 'KeluargaLain', password: 'kata-sandi-kuat' })).json().token;
+  assert.equal((await taskRequest('PUT', path, token, quran)).statusCode, 403);
+  assert.equal((await taskRequest('PUT', path, otherParent, quran)).statusCode, 404);
+  assert.equal((await assign({ kind: 'quran', surahId: '2' })).statusCode, 400);
+  assert.equal((await assign(quran)).statusCode, 200);
+  assert.equal((await taskRequest('PUT', `/children/${profile.id}/policy`, parent, policy)).statusCode, 200);
+  const assigned = (await dashboard()).children[0];
+  assert.equal(assigned.readingAssignment, 'quran');
+  assert.equal(assigned.surahId, '114');
+  const quranQuery = `selection=self&revision=${assigned.tvRevision}`;
+  assert.equal((await submit(quranQuery, '112')).statusCode, 400);
+  assert.equal((await submit(`kind=book&revision=${assigned.tvRevision}&bookId=kucing-di-teras`)).statusCode, 400);
+  const sent = await submit(quranQuery, '114');
+  assert.equal(sent.statusCode, 201);
+  const recitationId = sent.json().recitation.id;
+  assert.equal((await taskRequest('POST', `/recitations/${recitationId}/review`, parent, { decision: 'approve' })).statusCode, 200);
+  assert.equal((await assign(quran)).json().child.tvRevision, assigned.tvRevision);
+  assert.equal((await dashboard()).recitations.find((rec: { id: string }) => rec.id === recitationId).status, 'approved');
+
+  const template = bookTemplates.get('kucing-di-teras')!;
+  assert.equal((await assign({ kind: 'book', bookId: template.id })).statusCode, 200);
+  const bookDashboard = await dashboard();
+  const book = bookDashboard.children[0];
+  assert.equal(book.readingAssignment, 'book');
+  assert.deepEqual(book.bookReading, { title: template.title, text: template.text });
+  assert.equal(bookDashboard.recitations.find((rec: { id: string }) => rec.id === recitationId).status, 'rejected');
+  assert.equal((await taskRequest('POST', '/tv/authorize', token, { recitationId })).statusCode, 403);
+  assert.equal((await submit(quranQuery, '114')).statusCode, 409);
+  const bookQuery = `kind=book&revision=${book.tvRevision}`;
+  assert.equal((await submit(`${bookQuery}&bookId=jejak-kelinci`)).statusCode, 400);
+  const bookSubmission = await submit(bookQuery);
+  assert.equal(bookSubmission.statusCode, 201);
+  assert.equal(bookSubmission.json().recitation.bookTitle, template.title);
+
+  const excerpt = { title: 'Bacaan keluarga', text: 'Hari ini kami membaca cerita bersama di teras depan.' };
+  assert.equal((await assign({ kind: 'book', ...excerpt, text: 'Singkat.' })).statusCode, 400);
+  const customAssignment = await assign({ kind: 'book', ...excerpt });
+  assert.equal(customAssignment.statusCode, 200, customAssignment.body);
+  const custom = customAssignment.json().child;
+  assert.deepEqual(custom.bookReading, excerpt);
+  assert.equal((await submit(bookQuery)).statusCode, 409);
+  const customSubmission = await submit(`kind=book&revision=${custom.tvRevision}`);
+  assert.equal(customSubmission.statusCode, 201, customSubmission.body);
+  assert.equal(customSubmission.json().recitation.bookTitle, excerpt.title);
+  const free = (await assign({ kind: 'free' })).json().child;
+  assert.equal(free.readingAssignment, 'free');
+  assert.equal(free.bookReading, undefined);
+  assert.equal((await submit(`selection=self&revision=${free.tvRevision}`, '112')).statusCode, 201);
+});

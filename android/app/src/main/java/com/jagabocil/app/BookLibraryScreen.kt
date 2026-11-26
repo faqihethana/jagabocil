@@ -39,11 +39,13 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-@Composable internal fun BookLibraryScreen(vm: AppViewModel, onExit: () -> Unit) {
+@Composable internal fun BookLibraryScreen(vm: AppViewModel, onPick: ((Story) -> Unit)? = null, onExit: () -> Unit) {
     val templates = vm.bookTemplates
     val themes = remember(templates) { templates.map { it.theme }.distinct() }
     val dashboard = vm.dashboard
-    val childId = dashboard?.takeIf { it.role == "child" && it.bookLibrary }?.children?.firstOrNull()?.id
+    val child = dashboard?.takeIf { it.role == "child" && it.bookLibrary }?.children?.firstOrNull()
+    val childId = child?.id
+    val canUseForTv = child?.readingAssignment == "free"
     var query by rememberSaveable { mutableStateOf("") }
     var theme by rememberSaveable { mutableStateOf("") }
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -64,7 +66,7 @@ import kotlinx.coroutines.launch
     BackHandler(enabled = template != null) { openId = null }
 
     if (template != null) {
-        BookStoryScreen(vm, template, canUseForTv = childId != null, onBack = { openId = null })
+        BookStoryScreen(vm, template, canUseForTv, onPick, onBack = { openId = null })
         return
     }
     val saved = vm.generatedStories
@@ -109,12 +111,14 @@ import kotlinx.coroutines.launch
     }
 }
 
-@Composable private fun BookStoryScreen(vm: AppViewModel, template: Story, canUseForTv: Boolean, onBack: () -> Unit) {
+@Composable private fun BookStoryScreen(
+    vm: AppViewModel, template: Story, canUseForTv: Boolean, onPick: ((Story) -> Unit)?, onBack: () -> Unit,
+) {
     var showAi by rememberSaveable(template.id) { mutableStateOf(false) }
     var generating by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val variant = vm.generatedStories[template.id]
+    val variant = if (onPick == null) vm.generatedStories[template.id] else null
     val reading = if (showAi) variant ?: template else template
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
         LibraryHeader(reading.title, onBack)
@@ -129,7 +133,7 @@ import kotlinx.coroutines.launch
                 }
             }
             item { StoryBody(reading.text) }
-            if (canUseForTv && vm.dashboard?.storyGeneration == true && variant == null) item {
+            if (vm.dashboard?.role == "child" && vm.dashboard?.storyGeneration == true && variant == null) item {
                 OutlinedButton(onClick = {
                     generating = true
                     failure = null
@@ -156,11 +160,11 @@ import kotlinx.coroutines.launch
             }
             failure?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
         }
-        if (canUseForTv) {
+        if (canUseForTv || onPick != null) {
             Button(
-                onClick = { vm.selectBook(reading) }, enabled = !vm.busy,
+                onClick = { if (onPick != null) onPick(template) else vm.selectBook(reading) }, enabled = !vm.busy,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            ) { Text("Pakai untuk izin TV") }
+            ) { Text(if (onPick != null) "Pilih cerita ini" else "Pakai untuk izin TV") }
         }
     }
 }
