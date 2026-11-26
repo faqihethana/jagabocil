@@ -11,6 +11,27 @@ import kotlinx.serialization.Serializable
 @Serializable internal data class GeneratedStories(val books: List<Story>)
 @Serializable internal data class GeneratedStory(val book: Story)
 @Serializable data class BookReading(val title: String, val text: String)
+@Serializable data class ReadingTask(
+    val kind: String,
+    val id: String = "",
+    val surahId: String? = null,
+    val firstAyah: Int? = null,
+    val lastAyah: Int? = null,
+    val title: String? = null,
+    val text: String? = null,
+) {
+    val verseLabel get() = verseRangeLabel(firstAyah, lastAyah)
+    internal fun title(quran: QuranLibrary) = title ?: quran.name(surahId.orEmpty())
+    internal fun minSeconds(child: Child) = if (firstAyah != null) minOf(child.minSeconds, 5) else child.minSeconds
+}
+@Serializable internal data class ReadingTaskPlan(val tasks: List<ReadingTask>)
+@Serializable data class TaskPermit(val recitationId: String, val expiresAt: Long)
+
+private fun verseRangeLabel(first: Int?, last: Int?) = when {
+    first == null || last == null -> null
+    first == last -> "Ayat $first"
+    else -> "Ayat $first–$last"
+}
 @Serializable data class Child(
     val id: String, val name: String, val mode: String, val surahId: String,
     val minSeconds: Int, val unlockMinutes: Int, val tvBrand: String, val aiConsent: Boolean,
@@ -18,12 +39,14 @@ import kotlinx.serialization.Serializable
     val tvPlatform: String = "wol", val tvHost: String = "",
     val username: String? = null, val tvRevision: Int? = null,
     val readingAssignment: String = "free", val bookReading: BookReading? = null,
+    val readingTasks: List<ReadingTask> = emptyList(), val readingCycle: Int = 0,
 ) {
     val awaitsTv get() = tvTransport == "infrared" && tvBrand == "none"
 }
 internal fun Child.readingTaskTitle(quran: QuranLibrary): String = when (readingAssignment) {
     "quran" -> "Ngaji · ${quran.name(surahId)}"
     "book" -> bookReading?.let { "Baca buku · ${it.title}" } ?: "Baca buku"
+    "plan" -> "${readingTasks.size} tugas · ${readingTasks.firstOrNull()?.title(quran).orEmpty()}"
     else -> "Anak pilih sendiri"
 }
 @Serializable data class Recitation(
@@ -32,16 +55,20 @@ internal fun Child.readingTaskTitle(quran: QuranLibrary): String = when (reading
     val usedAt: Long? = null, val feedback: String, val reviewer: String? = null,
     val readyAt: Long? = null, val reviewedAt: Long? = null,
     val readingKind: String = "quran", val bookTitle: String? = null, val hasTranscript: Boolean = false,
+    val matchScore: Int? = null,
+    val taskId: String? = null, val taskCycle: Int? = null,
+    val firstAyah: Int? = null, val lastAyah: Int? = null,
 ) {
     fun canUse(now: Long) = status == "approved" && usedAt == null && (expiresAt ?: 0L) > now
 }
 
 internal fun Recitation.readingTitle(quran: QuranLibrary) =
-    if (readingKind == "book") bookTitle ?: "Bacaan buku" else quran.name(surahId)
+    if (readingKind == "book") bookTitle ?: "Bacaan buku"
+    else listOfNotNull(quran.name(surahId), verseRangeLabel(firstAyah, lastAyah)).joinToString(" · ")
 
 @Serializable internal data class ReadingDetails(
     val transcript: String? = null, val referenceText: String? = null,
-    val matchScore: Int? = null, val matchThreshold: Int,
+    val matchScore: Int? = null, val matchThreshold: Int, val vocalizedTranscript: String? = null,
 )
 @Serializable data class Dashboard(
     val role: String, val name: String, val aiAvailable: Boolean, val children: List<Child>,
@@ -51,6 +78,8 @@ internal fun Recitation.readingTitle(quran: QuranLibrary) =
     val readingActivities: Boolean = false,
     val bookLibrary: Boolean = false, val storyGeneration: Boolean = false,
     val readingAssignments: Boolean = false,
+    val multiReadingTasks: Boolean = false, val activeTaskRecitations: List<Recitation> = emptyList(),
+    val taskPermit: TaskPermit? = null,
 )
 @Serializable data class UploadedRecitation(val recitation: Recitation)
 @Serializable data class Billing(val amount: Int, val days: Int, val expiresAt: Long?, val pending: Boolean)

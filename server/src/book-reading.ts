@@ -7,15 +7,21 @@ export function readingWords(text: string) {
 
 export function bookMatchScore(reference: string, transcript: string) {
   const expected = readingWords(reference), heard = readingWords(transcript);
-  if (!expected.length || !heard.length) return 0;
-  // Count substitutions, omitted words, and extra words across the whole passage.
-  let previous = Array.from({ length: expected.length + 1 }, (_, index) => index);
+  return matchReadingWords(expected, heard).score;
+}
+
+export function matchReadingWords(expected: string[], heard: string[]) {
+  // Count substitutions, omissions, and extra words across the whole passage.
+  const rows = [Array.from({ length: expected.length + 1 }, (_, index) => index)];
   for (const [index, word] of heard.entries()) {
+    const previous = rows[index]!;
     const current = [index + 1];
     for (const [i, expectedWord] of expected.entries()) {
       current.push(Math.min(previous[i + 1]! + 1, current[i]! + 1, previous[i]! + Number(word !== expectedWord)));
     }
-    previous = current;
+    rows.push(current);
   }
-  return Math.max(0, Math.round(100 * (1 - previous[expected.length]! / expected.length)));
+  const distance = rows[heard.length]![expected.length]!;
+  const score = expected.length ? Math.max(0, Math.round(100 * (1 - distance / expected.length))) : 0;
+  return { score, rows };
 }

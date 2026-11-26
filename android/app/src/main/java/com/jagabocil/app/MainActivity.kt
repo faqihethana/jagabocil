@@ -80,8 +80,11 @@ class MainActivity : ComponentActivity() {
     androidx.activity.compose.BackHandler(enabled = vm.screen in listOf("quran", "books") || vm.dashboard != null && (vm.screen != "home" || recordingInProgress)) {
         when {
             vm.screen == "tv-setup" -> if (!vm.busy) vm.leaveTvSetup()
-            vm.screen.startsWith("reading-task:") -> if (!vm.busy) vm.screen = vm.screen.split(':')[1]
-            vm.screen.startsWith("settings:") -> vm.screen = "family"
+            vm.screen.startsWith("reading-task:") -> if (!vm.busy) vm.screen = readingTaskReturn(vm.screen)
+            vm.screen.startsWith("settings:") -> if (!vm.busy) vm.screen = "child-profile:${vm.screen.substringAfter(':')}"
+            vm.screen.startsWith("child-profile:") -> vm.screen = "family"
+            vm.screen == "account" -> vm.closeAccountSettings()
+            vm.screen == "books" -> vm.closeBooks()
             vm.screen.startsWith("review:") -> { vm.stopPlayback(); vm.screen = "home" }
             recordingInProgress -> vm.message = "Selesaikan atau hapus rekaman dulu, ya."
             else -> vm.screen = "home"
@@ -123,7 +126,7 @@ class MainActivity : ComponentActivity() {
                         NavigationBarItem(selected = vm.screen == "home", onClick = { vm.screen = "home" }, icon = { Icon(Icons.Outlined.Home, null) }, label = { Text("Beranda") }, colors = colors)
                         NavigationBarItem(selected = vm.screen == "history", onClick = { vm.screen = "history" }, icon = { Icon(Icons.Outlined.History, null) }, label = { Text("Riwayat") }, colors = colors)
                         NavigationBarItem(selected = vm.screen == "quran", onClick = { vm.screen = "quran" }, icon = { Icon(Icons.AutoMirrored.Outlined.MenuBook, null) }, label = { Text("Al-Qur’an", softWrap = false) }, colors = colors)
-                        NavigationBarItem(selected = vm.screen == "books", onClick = { vm.screen = "books" }, icon = { Icon(Icons.Outlined.Book, null) }, label = { Text("Buku") }, colors = colors)
+                        NavigationBarItem(selected = vm.screen == "books", onClick = { if (vm.screen != "books") vm.openBooks() }, icon = { Icon(Icons.Outlined.Book, null) }, label = { Text("Buku") }, colors = colors)
                         NavigationBarItem(selected = vm.screen == "family", onClick = { vm.screen = "family" }, icon = { Icon(if (parent) Icons.Outlined.People else Icons.Outlined.Info, null) }, label = { Text(if (parent) "Keluarga" else "Panduan") }, colors = colors)
                     }
                 }
@@ -135,8 +138,8 @@ class MainActivity : ComponentActivity() {
             }
             val data = vm.dashboard
             when {
-                vm.screen == "quran" -> QuranScreen(vm.quran, vm.api) { vm.screen = "home" }
-                vm.screen == "books" -> BookLibraryScreen(vm) { vm.screen = "home" }
+                vm.screen == "quran" -> QuranScreen(vm.quran, vm.api, accountMenu = childAccountMenu(vm, data)) { vm.screen = "home" }
+                vm.screen == "books" -> BookLibraryScreen(vm, accountMenu = childAccountMenu(vm, data), onExit = vm::closeBooks)
                 data == null && !vm.loggedIn -> Welcome(vm)
                 data == null -> Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Menyambungkan keluarga…", style = MaterialTheme.typography.titleLarge)
@@ -144,24 +147,34 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = vm::refresh, enabled = !vm.busy) { Text("Coba lagi") }
                     TextButton(onClick = vm::logout, enabled = !vm.busy) { Text("Kembali ke halaman masuk") }
                     TextButton(onClick = { vm.screen = "quran" }) { Text("Baca Al-Qur’an") }
-                    TextButton(onClick = { vm.screen = "books" }) { Text("Buka rak buku") }
+                    TextButton(onClick = { vm.openBooks() }) { Text("Buka rak buku") }
                 }
                 vm.screen == "tv-setup" && data.role == "child" -> TvSetupScreen(vm, data)
                 vm.screen.startsWith("review:") && data.role == "parent" -> ReviewScreen(vm, data)
                 vm.screen.startsWith("reading-task:") && data.role == "parent" -> {
                     val route = vm.screen
                     val child = data.children.find { it.id == route.substringAfterLast(':') }
-                    val back = { vm.screen = route.split(':')[1] }
+                    val back = { vm.screen = readingTaskReturn(route) }
                     if (child != null && data.readingAssignments) {
-                        key(child.id) { ReadingTaskScreen(vm, child, back) }
+                        key(child.id) {
+                            if (data.multiReadingTasks) MultiReadingTaskScreen(vm, child, back)
+                            else ReadingTaskScreen(vm, child, back)
+                        }
                     } else LaunchedEffect(route) { back() }
                 }
-                vm.screen.startsWith("settings:") -> {
+                vm.screen.startsWith("settings:") && data.role == "parent" -> {
                     val child = data.children.find { it.id == vm.screen.substringAfter(':') }
                     if (child != null) SettingsScreen(vm, data, child)
                     else LaunchedEffect(Unit) { vm.screen = "family" }
                 }
+                vm.screen.startsWith("child-profile:") && data.role == "parent" -> {
+                    val child = data.children.find { it.id == vm.screen.substringAfter(':') }
+                    if (child != null) ChildProfile(vm, child, data.readingAssignments)
+                    else LaunchedEffect(Unit) { vm.screen = "family" }
+                }
                 vm.screen == "home" && data.role == "child" -> ChildHome(vm, data)
+                vm.screen == "child-reading" && data.role == "child" -> ChildReadingScreen(vm, data)
+                vm.screen == "account" && data.role == "parent" -> ParentAccountSettings(vm, data)
                 else -> {
                     Header(vm, data)
                     val pageScroll = key(vm.screen) { rememberScrollState() }
@@ -189,6 +202,9 @@ class MainActivity : ComponentActivity() {
     }
     vm.recoveryCode?.let { RecoveryCodeDialog(it, vm::dismissRecoveryCode) }
 }
+
+private fun readingTaskReturn(route: String) =
+    if (route.startsWith("reading-task:child-profile:")) route.removePrefix("reading-task:") else "home"
 
 @Composable private fun Brand() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -228,7 +244,7 @@ class MainActivity : ComponentActivity() {
             if (role == null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { vm.screen = "quran" }, modifier = Modifier.weight(1f)) { Text("Baca Al-Qur’an") }
-                    OutlinedButton(onClick = { vm.screen = "books" }, modifier = Modifier.weight(1f)) { Text("Buka rak buku") }
+                    OutlinedButton(onClick = { vm.openBooks() }, modifier = Modifier.weight(1f)) { Text("Buka rak buku") }
                 }
                 Surface(color = Peach, modifier = Modifier.fillMaxWidth().padding(top = extraSpace * 0.12f),
                     shape = RoundedCornerShape(30.dp)) {
@@ -276,8 +292,7 @@ class MainActivity : ComponentActivity() {
     })
 }
 
-@Composable private fun Header(vm: AppViewModel, data: Dashboard) {
-    var menu by remember { mutableStateOf(false) }
+@Composable internal fun Header(vm: AppViewModel, data: Dashboard) {
     val today = remember { SimpleDateFormat("EEEE, d MMMM", Locale.forLanguageTag("id-ID")).format(Date()) }
     Row(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -288,14 +303,31 @@ class MainActivity : ComponentActivity() {
             Text(today, color = Muted, style = MaterialTheme.typography.bodySmall)
             Text(data.name, color = Ink, style = MaterialTheme.typography.titleLarge)
         }
-        Box {
-            IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Menu akun") }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Perbarui") }, enabled = !vm.busy,
-                    leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, onClick = { menu = false; vm.refresh() })
-                DropdownMenuItem(text = { Text("Keluar dari akun ${data.name}") }, enabled = !vm.busy,
-                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Logout, null) }, onClick = { menu = false; vm.logout() })
+        AccountMenu(vm, data)
+    }
+}
+
+private fun childAccountMenu(vm: AppViewModel, data: Dashboard?): (@Composable () -> Unit)? {
+    val childData = data?.takeIf { it.role == "child" } ?: return null
+    return { AccountMenu(vm, childData) }
+}
+
+@Composable private fun AccountMenu(vm: AppViewModel, data: Dashboard) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) { Icon(Icons.Outlined.MoreVert, "Menu akun") }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (data.role == "parent") {
+                DropdownMenuItem(text = { Text("Pengaturan akun") }, enabled = !vm.busy,
+                    leadingIcon = { Icon(Icons.Outlined.Settings, null) }, onClick = {
+                        expanded = false
+                        vm.openAccountSettings()
+                    })
             }
+            DropdownMenuItem(text = { Text("Perbarui") }, enabled = !vm.busy,
+                leadingIcon = { Icon(Icons.Outlined.Refresh, null) }, onClick = { expanded = false; vm.refresh() })
+            DropdownMenuItem(text = { Text("Keluar dari akun ${data.name}") }, enabled = !vm.busy,
+                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Logout, null) }, onClick = { expanded = false; vm.logout() })
         }
     }
 }
@@ -306,6 +338,7 @@ class MainActivity : ComponentActivity() {
         ReadingBanner(null, "Buat akun anak", "Setelah akun siap, kamu bisa memilih tugas bacaan untuk anak.",
             accent = Peach, illustrated = true)
         AddChild(vm)
+        ParentQuickAccess(vm)
         return
     }
     ReadingBanner("Bacaan keluarga", when {
@@ -338,16 +371,21 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    ParentQuickAccess(vm)
+    if (data.recitations.isEmpty() && !vm.notificationsEnabled) NotificationSetting(vm, parent = true)
+}
+
+@Composable private fun ParentQuickAccess(vm: AppViewModel) {
     SectionTitle("Akses cepat")
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        DashboardLink("Profil anak", "${data.children.size} profil", Icons.Outlined.People, Mint, Modifier.weight(1f)) {
-            vm.screen = "family"
-        }
-        DashboardLink("Al-Qur’an", "Buka daftar surah", Icons.AutoMirrored.Outlined.MenuBook, Sky, Modifier.weight(1f)) {
+        DashboardLink("Al-Qur’an", "Daftar surah", Icons.AutoMirrored.Outlined.MenuBook, Sky, Modifier.weight(1f)) {
             vm.screen = "quran"
         }
+        DashboardLink("Buku", "Rak cerita", Icons.Outlined.Book, Butter, Modifier.weight(1f)) {
+            vm.openBooks()
+        }
     }
-    if (data.recitations.isEmpty() && !vm.notificationsEnabled) NotificationSetting(vm, parent = true)
+    TaskLink("Profil anak", "Kelola akun dan tugas bacaan", Icons.Outlined.People, Mint) { vm.screen = "family" }
 }
 
 @Composable private fun ReviewScreen(vm: AppViewModel, data: Dashboard) {
@@ -389,15 +427,22 @@ class MainActivity : ComponentActivity() {
                 }
                 if (!showListenButton) IconButton(onClick = { vm.play(r) }, enabled = !vm.busy) { Icon(if (vm.playing == r.id) Icons.Outlined.StopCircle else Icons.Outlined.PlayCircle, if (vm.playing == r.id) "Hentikan" else "Dengarkan rekaman", tint = Forest, modifier = Modifier.size(32.dp)) }
             }
-            val label = when { r.usedAt != null -> "Izin sudah dipakai"; r.status == "pending" -> "Menunggu diperiksa"; r.status == "rejected" -> "Coba lagi"; (r.expiresAt ?: 0) <= vm.serverNow() -> "Izin kedaluwarsa"; else -> "Disetujui ${if (r.reviewer == "ai") "AI" else "orang tua"}" }
+            val label = when {
+                r.usedAt != null -> "Izin sudah dipakai"
+                r.status == "pending" -> "Menunggu orang tua"
+                r.status == "rejected" -> "Coba lagi"
+                r.taskId != null -> "Tugas disetujui"
+                (r.expiresAt ?: 0) <= vm.serverNow() -> "Izin kedaluwarsa"
+                else -> "Disetujui ${if (r.reviewer == "ai") "AI" else "orang tua"}"
+            }
             val statusColor = when (r.status) {
                 "approved" -> Mint
                 "rejected" -> Rose
                 else -> Butter
             }
             Pill(label, statusColor, if (r.status == "pending") Amber else Ink)
+            AiReadingSummary(r)
             if (parent || r.status != "pending") Text(r.feedback, fontSize = 13.sp, color = Muted)
-            if (parent && (r.hasTranscript || r.readingKind == "book")) ReadingDetailsPanel(vm, r)
             if (showListenButton) OutlinedButton(onClick = { vm.play(r) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
                 Icon(if (vm.playing == r.id) Icons.Outlined.StopCircle else Icons.Outlined.PlayCircle, null)
                 Spacer(Modifier.width(8.dp)); Text(if (vm.playing == r.id) "Hentikan audio" else "Dengarkan bacaan")
@@ -408,6 +453,9 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = { vm.review(r.id, true) }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("Setujui") }
                 }
             }
+            if (parent && (r.hasTranscript || r.readingKind == "book" || r.taskId != null)) {
+                ReadingDetailsPanel(vm, r, initiallyExpanded = showListenButton && r.hasTranscript)
+            }
             if (parent) TextButton(onClick = { confirmDelete = true }, enabled = !vm.busy, contentPadding = PaddingValues(0.dp)) { Text("Hapus rekaman", color = Muted, fontSize = 12.sp) }
         }
     }
@@ -416,39 +464,48 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Family(vm: AppViewModel, data: Dashboard) {
     var adding by rememberSaveable { mutableStateOf(false) }
-    ReadingBanner(null, "Akun anak", "Kelola login anak dan aturan pemeriksaan bacaan.", Mint, Icons.Outlined.People)
-    data.children.forEach { child -> key(child.id) { ChildCard(vm, child, data.readingAssignments) } }
-    if (adding || data.children.isEmpty()) AddChild(vm) { adding = false }
-    else OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("Tambah akun anak") }
-    SectionTitle("Pengaturan akun")
-    NotificationSetting(vm, parent = true)
-    RecoverySetting(vm, data.recoveryConfigured)
-    if (BuildConfig.DEBUG) data.billing?.let { BillingSetting(vm, it) }
+    ReadingBanner(null, "Keluarga", "Pilih profil untuk mengatur bacaan, login, dan izin TV anak.", Mint, Icons.Outlined.People)
+    data.children.forEach { child ->
+        key(child.id) {
+            val login = child.username?.let { "@$it" } ?: "Login belum disiapkan"
+            val detail = if (data.readingAssignments) "$login · ${child.readingTaskTitle(vm.quran)}" else login
+            TaskLink(child.name, detail, Icons.Outlined.Person, Rose) { vm.screen = "child-profile:${child.id}" }
+        }
+    }
+    if (adding || data.children.isEmpty()) {
+        AddChild(vm) { adding = false }
+        if (data.children.isNotEmpty()) TextButton(onClick = { adding = false }, enabled = !vm.busy) { Text("Batal") }
+    } else OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("Tambah akun anak") }
 }
 
-@Composable private fun ChildCard(vm: AppViewModel, child: Child, readingAssignments: Boolean) {
+@Composable private fun ParentAccountSettings(vm: AppViewModel, data: Dashboard) {
+    Column(Modifier.widthIn(max = 680.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LibraryHeader("Pengaturan akun", vm::closeAccountSettings)
+        NotificationSetting(vm, parent = true)
+        RecoverySetting(vm, data.recoveryConfigured)
+        if (BuildConfig.DEBUG) data.billing?.let { BillingSetting(vm, it) }
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+@Composable private fun ChildProfile(vm: AppViewModel, child: Child, readingAssignments: Boolean) {
     var editingAccount by remember(child.id) { mutableStateOf(false) }
-    Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
-        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(44.dp).background(Rose, CircleShape), contentAlignment = Alignment.Center) { Text(child.name.take(1).uppercase(), fontWeight = FontWeight.Bold, fontSize = 20.sp) }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(child.name, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    Text(child.username?.let { "@$it" } ?: "Login belum disiapkan", color = Muted, fontSize = 12.sp)
-                }
-                TextButton(onClick = { vm.screen = "settings:${child.id}" }) { Text("Ubah aturan") }
-            }
-            if (readingAssignments) {
-                TaskLink("Tugas bacaan", child.readingTaskTitle(vm.quran),
-                    Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = !vm.busy) {
-                    vm.screen = "reading-task:family:${child.id}"
-                }
-            }
-            OutlinedButton(onClick = { editingAccount = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (child.username == null) "Siapkan login anak" else "Ubah login anak")
+    Column(Modifier.widthIn(max = 680.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        LibraryHeader("Profil ${child.name}", { vm.screen = "family" })
+        if (readingAssignments) {
+            TaskLink("Tugas bacaan", child.readingTaskTitle(vm.quran),
+                Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = !vm.busy) {
+                vm.screen = "reading-task:child-profile:${child.id}"
             }
         }
+        TaskLink("Pemeriksaan dan izin TV",
+            if (child.mode == "ai") "Bantuan AI · ${child.unlockMinutes} menit" else "Diperiksa orang tua · ${child.unlockMinutes} menit",
+            Icons.Outlined.Tv, Mint, enabled = !vm.busy) { vm.screen = "settings:${child.id}" }
+        TaskLink(if (child.username == null) "Siapkan login anak" else "Ubah login anak",
+            child.username?.let { "@$it" } ?: "Buat username dan kata sandi",
+            Icons.Outlined.Person, Rose, enabled = !vm.busy) { editingAccount = true }
     }
     if (editingAccount) ChildAccountDialog(vm, child) { editingAccount = false }
 }
@@ -498,7 +555,7 @@ class MainActivity : ComponentActivity() {
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { vm.screen = "family" }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
+            IconButton(onClick = { vm.screen = "child-profile:${child.id}" }, enabled = !vm.busy) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
             SectionTitle("Aturan untuk ${child.name}")
         }
         SectionTitle("Metode pemeriksaan")
@@ -516,7 +573,7 @@ class MainActivity : ComponentActivity() {
                         Text("Izinkan pengiriman audio dan penyimpanan transkripsi", Modifier.weight(1f), fontWeight = FontWeight.Medium)
                         Switch(checked = consent, onCheckedChange = { consent = it })
                     }
-                    Text("AI menyalin rekaman hingga 120 detik. Untuk buku, JagaBocil juga mencocokkan teks. Transkripsi dapat dilihat orang tua selama rekaman tersimpan, hingga 7 hari.", color = Muted, fontSize = 12.sp)
+                    Text("DeepSeek menyalin rekaman hingga 120 detik. JagaBocil memperkirakan kemiripan dengan teks bacaan. Orang tua bisa membuka transkripsi hingga 7 hari.", color = Muted, fontSize = 12.sp)
                 }
             }
         }

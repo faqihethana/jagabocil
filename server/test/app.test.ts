@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import { postgresDatabase } from '../src/database.js';
 import { createHash, randomUUID } from 'node:crypto';
-import type { Transcribe } from '../src/ai.js';
+import type { Transcribe } from '../src/deepseek.js';
+import { sqliteDatabase } from '../src/sqlite.js';
 import { isTaskSurah, quranText } from '../src/catalog.js';
 import { bookTemplates, storySchema } from '../src/book-library.js';
 
@@ -160,8 +161,8 @@ test('a transcript without intelligible words stays pending for manual review', 
   assert.equal(rec.hasTranscript, false);
   await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'reject' });
 });
-test('Quran transcripts are for the parent to compare and require manual approval', async () => {
-  const transcript = 'قل هو الله أحد';
+test('Quran transcripts add reference harakat and score omissions while requiring parent approval', async () => {
+  const transcript = 'بسم الله الرحمن الرحيم. قل هو الله شيئ';
   transcribe = async () => transcript;
   const rec = (await upload()).json().recitation;
   assert.equal(rec.status, 'pending');
@@ -172,7 +173,10 @@ test('Quran transcripts are for the parent to compare and require manual approva
   const details = await request('GET', detailsUrl, parent);
   assert.equal(details.statusCode, 200);
   assert.equal(details.json().transcript, transcript);
-  assert.equal(details.json().matchScore, null);
+  assert.equal(details.json().vocalizedTranscript, 'بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ. قُلْ هُوَ ٱللَّهُ شيئ');
+  assert.equal(details.json().matchScore, 20);
+  assert.equal(rec.matchScore, 20);
+  assert.equal((await request('GET', '/dashboard', child)).json().recitations.find((entry: { id: string }) => entry.id === rec.id).matchScore, 20);
   assert.equal((await request('GET', detailsUrl, child)).statusCode, 403);
   assert.equal((await request('GET', detailsUrl, outsider)).statusCode, 404);
   assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 403);
@@ -260,7 +264,7 @@ test('server without AI key allows manual mode and rejects AI activation', async
     assert.equal((await manual.inject({ method: 'PUT', url: `/children/${id}/policy`, headers, payload: aiPolicy })).statusCode, 400);
   } finally { await manual.close(); await rm(dir, { recursive: true, force: true }); }
 });
-test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent approval', async () => {
+test('legacy provider consent needs a fresh DeepSeek opt-in and still requires parent approval', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'jagabocil-provider-'));
   let calls = 0;
   const providerTranscribe: Transcribe = async () => {
@@ -280,7 +284,11 @@ test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent app
     const submit = () => family.inject({ method: 'POST', url: '/recitations', headers: { ...data.headers, ...childHeaders }, payload: data.payload });
     assert.equal((await optIn()).statusCode, 200);
     await family.close();
-    family = await createApp({ dataDir: dir, transcribe: providerTranscribe, aiProvider: 'deepseek' });
+    const db = sqliteDatabase(join(dir, 'jagabocil.sqlite'));
+    try {
+      await db.change("UPDATE children SET mode='ai',ai_consent=3 WHERE id=?", created.json().child.id);
+    } finally { await db.close(); }
+    family = await createApp({ dataDir: dir, transcribe: providerTranscribe });
     const dashboard = (await family.inject({ url: '/dashboard', headers: parentHeaders })).json();
     assert.equal(dashboard.children[0].mode, 'manual');
     assert.equal(dashboard.children[0].aiConsent, false);
@@ -676,4 +684,92 @@ test('a parent can assign a surah or book and only the current reading can earn 
   assert.equal(free.readingAssignment, 'free');
   assert.equal(free.bookReading, undefined);
   assert.equal((await submit(`selection=self&revision=${free.tvRevision}`, '112')).statusCode, 201);
+});
+
+test('a mixed plan reviews the selected ayahs and grants one TV permit after all tasks', async () => {
+  const call = (method: 'GET' | 'POST' | 'PUT', url: string, token = '', payload?: unknown) => app.inject({
+    method, url, remoteAddress: '127.0.0.6', headers: token ? { authorization: `Bearer ${token}` } : {}, payload,
+  });
+  const owner = (await call('POST', '/auth/register', '', { username: 'PemilikDaftar', password: 'abcd' })).json().token;
+  const credentials = { username: 'AnakDaftar', password: 'abcd' };
+  const profile = (await call('POST', '/children/accounts', owner, { ...credentials, name: 'Anak Daftar' })).json().child;
+  const token = (await call('POST', '/auth/child/login', '', credentials)).json().token;
+  const url = `/children/${profile.id}/reading-tasks`;
+  const assign = (tasks: unknown[]) => call('PUT', url, owner, { tasks });
+  const dashboard = async () => (await call('GET', '/dashboard?reading=extended', token)).json();
+  assert.equal((await call('PUT', `/children/${profile.id}/policy`, owner, aiPolicy)).statusCode, 200);
+  const part = { kind: 'quran', surahId: '112', firstAyah: 2, lastAyah: 2 };
+  const full = { kind: 'quran', surahId: '114' };
+  const book = { kind: 'book', bookId: 'kucing-di-teras' };
+  assert.equal((await call('PUT', url, token, { tasks: [part] })).statusCode, 403);
+  assert.equal((await assign([{ ...part, lastAyah: 15 }])).statusCode, 400);
+  assert.equal((await assign([part, part])).statusCode, 400);
+  const assigned = await assign([part, full, book]);
+  assert.equal(assigned.statusCode, 200, assigned.body);
+  const configured = assigned.json().child;
+  const [first, second, third] = configured.readingTasks;
+  assert.equal((await assign([part, full, book])).json().child.tvRevision, configured.tvRevision);
+  const submit = (taskId: string, surahId: string, seconds: number, cycle = configured.readingCycle) => {
+    const audio = multipart(wav(seconds), surahId);
+    const query = new URLSearchParams({ taskId, taskCycle: String(cycle), revision: String(configured.tvRevision) });
+    query.set(surahId ? 'selection' : 'kind', surahId ? 'self' : 'book');
+    return app.inject({ method: 'POST', url: `/recitations?${query}`, remoteAddress: '127.0.0.6',
+      headers: { ...audio.headers, authorization: `Bearer ${token}` }, payload: audio.payload });
+  };
+  const review = (id: string, decision = 'approve') => call('POST', `/recitations/${id}/review`, owner, { decision });
+  const permit = (id: string) => call('POST', '/tv/authorize', token, { recitationId: id });
+  assert.equal((await submit(first.id, '114', 6)).statusCode, 400);
+  assert.equal((await submit(first.id, '112', 4)).statusCode, 400);
+  assert.equal((await submit('unassigned', '112', 6)).statusCode, 409);
+  transcribe = async () => 'الله الصمد';
+  const sent = await submit(first.id, '112', 6);
+  assert.equal(sent.statusCode, 201, sent.body);
+  const firstRecording = sent.json().recitation;
+  assert.equal(firstRecording.firstAyah, 2);
+  assert.equal(firstRecording.lastAyah, 2);
+  assert.equal(firstRecording.matchScore, 100);
+  const details = (await call('GET', `/recitations/${firstRecording.id}/reading-details`, owner)).json();
+  assert.equal(details.referenceText, quranText('112')!.ayahs[1]);
+  assert.equal(details.vocalizedTranscript, quranText('112')!.ayahs[1]);
+  assert.equal((await submit(first.id, '112', 6)).statusCode, 409);
+  assert.equal((await review(firstRecording.id)).statusCode, 200);
+  assert.equal((await permit(firstRecording.id)).statusCode, 403);
+  assert.equal((await dashboard()).taskPermit, null);
+
+  const secondSubmission = await submit(second.id, '114', 11);
+  assert.equal(secondSubmission.statusCode, 201, secondSubmission.body);
+  const rejected = secondSubmission.json().recitation.id;
+  assert.equal((await review(rejected, 'reject')).statusCode, 200);
+  const retry = await submit(second.id, '114', 11);
+  assert.equal(retry.statusCode, 201, retry.body);
+  assert.equal((await review(retry.json().recitation.id)).statusCode, 200);
+  now += 16 * 60_000;
+  const bookSubmission = await submit(third.id, '', 11);
+  assert.equal(bookSubmission.statusCode, 201, bookSubmission.body);
+  const thirdRecording = bookSubmission.json().recitation;
+  assert.equal(thirdRecording.bookTitle, bookTemplates.get(book.bookId)!.title);
+  assert.equal((await review(thirdRecording.id)).statusCode, 200);
+  const complete = await dashboard();
+  assert.equal(complete.activeTaskRecitations.length, 3);
+  assert.equal(complete.taskPermit.expiresAt, now + policy.unlockMinutes * 60_000);
+  const simultaneous = await Promise.all([permit(firstRecording.id), permit(thirdRecording.id)]);
+  assert.deepEqual(simultaneous.map(response => response.statusCode).sort(), [200, 403]);
+  const next = await dashboard();
+  assert.equal(next.taskPermit, null);
+  assert.deepEqual(next.activeTaskRecitations, []);
+  assert.equal(next.children[0].readingCycle, configured.readingCycle + 1);
+  assert.equal((await submit(first.id, '112', 6)).statusCode, 409);
+  const nextCycle = next.children[0].readingCycle;
+  for (const [task, surahId, seconds] of [[first, '112', 6], [second, '114', 11], [third, '', 11]] as const) {
+    const attempt = await submit(task.id, surahId, seconds, nextCycle);
+    assert.equal(attempt.statusCode, 201, attempt.body);
+    assert.equal((await review(attempt.json().recitation.id)).statusCode, 200);
+  }
+  const expiring = (await dashboard()).taskPermit;
+  now = expiring.expiresAt;
+  assert.equal((await permit(expiring.recitationId)).statusCode, 403);
+  const restarted = await dashboard();
+  assert.equal(restarted.taskPermit, null);
+  assert.equal(restarted.children[0].readingCycle, nextCycle + 1);
+  assert.deepEqual(restarted.activeTaskRecitations, []);
 });

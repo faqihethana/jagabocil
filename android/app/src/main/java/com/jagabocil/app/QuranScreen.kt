@@ -3,6 +3,7 @@ package com.jagabocil.app
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,8 +23,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -57,12 +58,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private val Arabic = FontFamily(Font(R.font.amiri_quran))
 
-@Composable internal fun QuranScreen(library: QuranLibrary, api: Api, onExit: () -> Unit) {
+@Composable internal fun QuranScreen(
+    library: QuranLibrary, api: Api, accountMenu: (@Composable () -> Unit)? = null, onExit: () -> Unit,
+) {
     var outsideJuz by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -75,13 +80,13 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
 
     if (chapter != null) {
         key(chapter.id) {
-            QuranChapterScreen(chapter, library, api, onBack = { openId = null }) {
+            QuranChapterScreen(chapter, library, api, accountMenu, onBack = { openId = null }) {
                 downloaded = downloaded + chapter.id
             }
         }
     } else {
         Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
-            LibraryHeader("Al-Qur’an", onExit)
+            LibraryHeader("Al-Qur’an", onExit, accountMenu)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !outsideJuz, onClick = { outsideJuz = false }, label = { Text("Juz 30") })
                 FilterChip(selected = outsideJuz, onClick = { outsideJuz = true }, label = { Text("Surah lainnya") })
@@ -114,7 +119,8 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
 }
 
 @Composable private fun QuranChapterScreen(
-    chapter: QuranChapter, library: QuranLibrary, api: Api, onBack: () -> Unit, onDownloaded: () -> Unit,
+    chapter: QuranChapter, library: QuranLibrary, api: Api, accountMenu: (@Composable () -> Unit)?,
+    onBack: () -> Unit, onDownloaded: () -> Unit,
 ) {
     var ayahs by remember { mutableStateOf(chapter.ayahs) }
     var loading by remember { mutableStateOf(chapter.ayahs == null) }
@@ -125,7 +131,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
         loading = false
     }
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
-        LibraryHeader(chapter.name, onBack)
+        LibraryHeader(chapter.name, onBack, accountMenu)
         Text("${chapter.verses} ayat", Modifier.padding(start = 12.dp, bottom = 10.dp))
         val text = ayahs
         if (text != null) {
@@ -174,21 +180,41 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val visible = remember(query, chapters) { chapters.filter { it.matches(query) } }
-    AlertDialog(
-        onDismissRequest = onDismiss, title = { Text("Pilih surah Juz 30") },
-        text = {
-            Column {
-                LibrarySearch(query, "Cari nama atau nomor surah") { query = it }
-                LazyColumn(Modifier.heightIn(max = 340.dp)) {
-                    if (visible.isEmpty()) item { Text("Surah tidak ditemukan.", Modifier.padding(vertical = 16.dp)) }
-                    items(visible, key = { it.id }) { chapter ->
-                        QuranRow(chapter, if (chapter.id == selected) "Dipilih" else null) { onChoose(chapter.id) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().heightIn(max = maxHeight * 0.9f),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { SectionTitle("Pilih surah Juz 30") }
+                        IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Tutup pemilih surah") }
+                    }
+                    LibrarySearch(query, "Cari nama atau nomor surah") { query = it }
+                    LazyColumn(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (visible.isEmpty()) item { Text("Surah tidak ditemukan.", Modifier.padding(vertical = 16.dp)) }
+                        items(visible, key = { it.id }) { chapter ->
+                            QuranRow(chapter, if (chapter.id == selected) "Dipilih" else null) { onChoose(chapter.id) }
+                        }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
-    )
+        }
+    }
 }
 
 @Composable internal fun LibrarySearch(query: String, label: String, onChange: (String) -> Unit) {
@@ -222,21 +248,22 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
     }
 }
 
-@Composable internal fun LibraryHeader(title: String, onBack: () -> Unit) {
+@Composable internal fun LibraryHeader(title: String, onBack: () -> Unit, actions: (@Composable () -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
-        SectionTitle(title)
+        Box(Modifier.weight(1f)) { SectionTitle(title) }
+        actions?.invoke()
     }
 }
 
-internal fun LazyListScope.quranVerses(id: String, ayahs: List<String>) {
+internal fun LazyListScope.quranVerses(id: String, ayahs: List<String>, firstAyah: Int = 1) {
     // Tanzil includes the basmala before verse one except in Al-Fatihah and At-Tawbah.
-    val first = if (id != "1" && id != "9") ayahs.first().split(' ', limit = 5) else emptyList()
+    val first = if (firstAyah == 1 && id != "1" && id != "9") ayahs.first().split(' ', limit = 5) else emptyList()
     if (first.size == 5) {
         item { ArabicText(first.take(4).joinToString(" "), Modifier.fillMaxWidth(), TextAlign.Center) }
     }
     itemsIndexed(ayahs) { index, ayah ->
-        QuranAyah(if (index == 0 && first.size == 5) first.last() else ayah, index + 1)
+        QuranAyah(if (index == 0 && first.size == 5) first.last() else ayah, index + firstAyah)
     }
 }
 
@@ -256,7 +283,7 @@ internal fun LazyListScope.quranVerses(id: String, ayahs: List<String>) {
     }
 }
 
-@Composable private fun ArabicText(text: String, modifier: Modifier, alignment: TextAlign) {
+@Composable internal fun ArabicText(text: String, modifier: Modifier, alignment: TextAlign = TextAlign.Right) {
     Text(
         text, modifier, style = TextStyle(
             fontFamily = Arabic, fontSize = 30.sp, lineHeight = 54.sp,

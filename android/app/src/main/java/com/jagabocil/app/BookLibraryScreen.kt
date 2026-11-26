@@ -39,7 +39,10 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-@Composable internal fun BookLibraryScreen(vm: AppViewModel, onPick: ((Story) -> Unit)? = null, onExit: () -> Unit) {
+@Composable internal fun BookLibraryScreen(
+    vm: AppViewModel, onPick: ((Story) -> Unit)? = null,
+    accountMenu: (@Composable () -> Unit)? = null, onExit: () -> Unit,
+) {
     val templates = vm.bookTemplates
     val themes = remember(templates) { templates.map { it.theme }.distinct() }
     val dashboard = vm.dashboard
@@ -66,7 +69,7 @@ import kotlinx.coroutines.launch
     BackHandler(enabled = template != null) { openId = null }
 
     if (template != null) {
-        BookStoryScreen(vm, template, canUseForTv, onPick, onBack = { openId = null })
+        BookStoryScreen(vm, template, canUseForTv, onPick, accountMenu, onBack = { openId = null })
         return
     }
     val saved = vm.generatedStories
@@ -81,7 +84,7 @@ import kotlinx.coroutines.launch
         }
     }
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
-        LibraryHeader("Rak Buku", onExit)
+        LibraryHeader("Rak Buku", onExit, accountMenu)
         LibrarySearch(query, "Cari judul atau tema") { query = it }
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -112,7 +115,8 @@ import kotlinx.coroutines.launch
 }
 
 @Composable private fun BookStoryScreen(
-    vm: AppViewModel, template: Story, canUseForTv: Boolean, onPick: ((Story) -> Unit)?, onBack: () -> Unit,
+    vm: AppViewModel, template: Story, canUseForTv: Boolean, onPick: ((Story) -> Unit)?,
+    accountMenu: (@Composable () -> Unit)?, onBack: () -> Unit,
 ) {
     var showAi by rememberSaveable(template.id) { mutableStateOf(false) }
     var generating by remember { mutableStateOf(false) }
@@ -121,7 +125,7 @@ import kotlinx.coroutines.launch
     val variant = if (onPick == null) vm.generatedStories[template.id] else null
     val reading = if (showAi) variant ?: template else template
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
-        LibraryHeader(reading.title, onBack)
+        LibraryHeader(reading.title, onBack, accountMenu)
         LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f),
             verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 12.dp),

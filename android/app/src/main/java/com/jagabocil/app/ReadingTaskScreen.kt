@@ -17,6 +17,8 @@ import java.text.Normalizer
 
 private val ReadingMarks = Regex("\\p{M}")
 private val ReadingWord = Regex("[\\p{L}\\p{N}]+")
+internal fun hasEnoughBookWords(text: String) =
+    ReadingWord.findAll(Normalizer.normalize(text, Normalizer.Form.NFKD).replace(ReadingMarks, "")).take(8).count() == 8
 
 @Composable internal fun ReadingTaskScreen(vm: AppViewModel, child: Child, onBack: () -> Unit) {
     var kind by rememberSaveable { mutableStateOf(child.readingAssignment) }
@@ -43,10 +45,7 @@ private val ReadingWord = Regex("[\\p{L}\\p{N}]+")
     }
     val selectedBook = vm.bookTemplates.find { it.id == bookId }
     val chapter = vm.quran.chapter(surahId)
-    val enoughWords = remember(text) {
-        ReadingWord.findAll(Normalizer.normalize(text, Normalizer.Form.NFKD).replace(ReadingMarks, ""))
-            .take(8).count() == 8
-    }
+    val enoughWords = remember(text) { hasEnoughBookWords(text) }
     val valid = when (kind) {
         "quran" -> chapter != null
         "book" -> if (custom) title.isNotBlank() && enoughWords else selectedBook != null

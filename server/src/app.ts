@@ -11,8 +11,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { isTaskSurah, legacySurahs, quranNotice, quranText, taskRecordingLimit } from './catalog.js';
-import type { Transcribe } from './ai.js';
+import type { Transcribe } from './deepseek.js';
 import { bookMatchScore, bookMatchThreshold, maxAiReadingSeconds, readingWords } from './book-reading.js';
+import { compareQuranReading } from './quran-reading.js';
+import { quranPassage, taskPlan, type ReadingTask } from './reading-tasks.js';
 import { bookTemplates, storySchema, type WriteStory } from './book-library.js';
 import { billing } from './billing.js';
 import type { Midtrans } from './midtrans.js';
@@ -37,13 +39,14 @@ function isPrivateIpv4(host: string) {
 }
 type TokenRole = 'parent' | 'child' | 'child_account';
 type Actor = { role: 'parent' | 'child'; accountLogin: boolean; id: string; authRevision: number; tokenHash: string; expires: number };
-type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null; book_title: string; book_text: string; reading_assignment: 'free' | 'quran' | 'book' };
-type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null; reading_kind: 'quran' | 'book'; book_title: string | null; reference_text: string | null; transcript: string | null; match_score: number | null; transcript_available?: boolean | number };
-// Values 1 and 2 covered sending audio without keeping transcripts.
-const aiConsentByProvider = { gemini: 3, deepseek: 4 } as const;
+type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null; book_title: string; book_text: string; reading_assignment: 'free' | 'quran' | 'book' | 'plan'; reading_tasks: string; reading_cycle: number };
+type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null; reading_kind: 'quran' | 'book'; book_title: string | null; reference_text: string | null; transcript: string | null; match_score: number | null; transcript_available?: boolean | number; task_id: string | null; task_cycle: number | null; first_ayah: number | null; last_ayah: number | null };
+const tasksFor = (child: Child): ReadingTask[] => JSON.parse(child.reading_tasks);
+// Earlier consent versions covered a different data policy or provider.
+const deepSeekConsent = 4;
 type GeneratedBook = { id: string; template_id: string; title: string; text: string };
 const publicStory = (book: GeneratedBook) => ({ id: book.id, templateId: book.template_id, title: book.title, text: book.text });
-type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; transcribe?: Transcribe; writeStory?: WriteStory; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
+type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; transcribe?: Transcribe; writeStory?: WriteStory; logger?: boolean; now?: () => number; midtrans?: Midtrans };
 class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }
 const fail = (code: number, message: string): never => { throw new HttpError(code, message); };
 
@@ -68,8 +71,8 @@ async function passwordMatches(password: string, stored: string) {
 
 export async function createApp(options: Options) {
   const now = options.now ?? Date.now;
-  const aiProvider = options.transcribe ? (options.aiProvider ?? 'gemini') : null;
-  const hasAiConsent = (child: Child) => aiProvider !== null && child.ai_consent === aiConsentByProvider[aiProvider];
+  const aiProvider = options.transcribe ? 'deepseek' : null;
+  const hasAiConsent = (child: Child) => aiProvider !== null && child.ai_consent === deepSeekConsent;
   const dataDir = resolve(options.dataDir);
   await mkdir(join(dataDir, 'recordings'), { recursive: true, mode: 0o700 });
   await mkdir(join(dataDir, 'tmp'), { recursive: true, mode: 0o700 });
@@ -131,8 +134,19 @@ export async function createApp(options: Options) {
     return rec;
   }
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
-  const publicChild = (c: Child, extended = true) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c), readingAssignment: c.reading_assignment, bookReading: extended && c.book_title ? { title: c.book_title, text: c.book_text } : undefined });
-  const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer, readingKind: r.reading_kind, bookTitle: r.book_title, hasTranscript: Boolean(r.transcript_available ?? r.transcript) });
+  const publicChild = (c: Child, extended = true) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c), readingAssignment: c.reading_assignment, bookReading: extended && c.book_title ? { title: c.book_title, text: c.book_text } : undefined, readingTasks: extended ? tasksFor(c) : undefined, readingCycle: c.reading_cycle });
+  const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer, readingKind: r.reading_kind, bookTitle: r.book_title, hasTranscript: Boolean(r.transcript_available ?? r.transcript), matchScore: r.match_score, taskId: r.task_id, taskCycle: r.task_cycle, firstAyah: r.first_ayah, lastAyah: r.last_ayah });
+  async function readingRound(child: Child) {
+    const current = await all<Recitation>(`SELECT * FROM recitations WHERE child_id=? AND task_cycle=? AND task_id IS NOT NULL
+      AND status IN ('approved','pending') AND created_at>? ORDER BY reviewed_at DESC NULLS LAST,id`,
+      child.id, child.reading_cycle, now() - 7 * day);
+    const lastApproval = current[0];
+    const permit = lastApproval?.reviewed_at != null && current.length === tasksFor(child).length &&
+      current.every(r => r.status === 'approved')
+      ? { recitationId: lastApproval.id, expiresAt: lastApproval.reviewed_at + child.unlock_minutes * 60_000 }
+      : null;
+    return { current, permit };
+  }
   const awaitingTv = (c: Child) => c.tv_transport === 'infrared' && c.tv_brand === 'none';
   // The capability belongs to a recently paired device and the policy revision it received.
   const tvSetupUntil = (a: Actor) => a.expires - sessionDuration + setupDuration;
@@ -155,11 +169,11 @@ export async function createApp(options: Options) {
     await change('UPDATE children SET pair_hash=NULL,pair_expires=NULL WHERE pair_expires<=?', now());
   }
   await cleanup();
-  const cleanupTimer = setInterval(() => { void cleanup().catch(e => app.log.error(e)); }, 60_000);
+  const cleanupTimer = setInterval(() => { void cleanup().catch(e => app.log.error(e)); }, 3_600_000);
   cleanupTimer.unref();
   app.addHook('onClose', async () => { clearInterval(cleanupTimer); await db.close(); });
 
-  app.get('/health', async () => ({ ok: true, aiAvailable: aiProvider !== null, aiProvider, database: db.kind, audioStore: recordings.kind, surahs: legacySurahs(), quranNotice }));
+  app.get('/health', async () => ({ ok: true, aiAvailable: aiProvider !== null, aiProvider, database: db.kind, audioStore: recordings.kind, multiReadingTasks: true, surahs: legacySurahs(), quranNotice }));
   app.get<{ Params: { id: string } }>('/quran/surahs/:id', async req => {
     return quranText(req.params.id) ?? fail(404, 'Surah tidak ditemukan.');
   });
@@ -282,7 +296,9 @@ export async function createApp(options: Options) {
     await db.batch([
       { sql: 'UPDATE children SET pair_hash=NULL,pair_expires=NULL,revision=revision+1,account_revision=account_revision+1 WHERE id=?', values: [c.id] },
       { sql: "DELETE FROM tokens WHERE subject_id=? AND (role='child' OR role='child_account')", values: [c.id] },
-      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Izin dicabut orang tua.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
+      { sql: `UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Izin dicabut orang tua.'
+        WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')
+        AND (task_cycle IS NULL OR task_cycle=(SELECT reading_cycle FROM children WHERE id=?))`, values: [c.id, c.id] },
     ]);
     return { ok: true };
   });
@@ -299,20 +315,23 @@ export async function createApp(options: Options) {
     if (book && (book.title || book.text) && (!book.title || readingWords(book.text).length < 8)) {
       return fail(400, 'Masukkan judul buku dan kutipan dengan minimal 8 kata.');
     }
-    const consent = p.mode === 'ai' && aiProvider ? aiConsentByProvider[aiProvider] : 0;
+    const consent = p.mode === 'ai' && aiProvider ? deepSeekConsent : 0;
     await db.batch([
       { sql: `UPDATE children SET mode=?,surah_id=CASE WHEN reading_assignment='quran' THEN surah_id ELSE ? END,
         min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,
         book_title=CASE WHEN reading_assignment='book' THEN book_title ELSE COALESCE(?,book_title) END,
         book_text=CASE WHEN reading_assignment='book' THEN book_text ELSE COALESCE(?,book_text) END,
         revision=revision+1 WHERE id=?`, values: [p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, consent, p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, book?.title ?? null, book?.text ?? null, c.id] },
-      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Aturan diperbarui. Yuk, rekam bacaan baru.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
+      { sql: `UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Aturan diperbarui. Yuk, rekam bacaan baru.'
+        WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')
+        AND (task_cycle IS NULL OR task_cycle=(SELECT reading_cycle FROM children WHERE id=?))`, values: [c.id, c.id] },
     ]);
     return { child: publicChild((await childFor(a, c.id)), true) };
   });
   app.put('/children/:id/reading-task', async req => {
     const a = await actor(req, 'parent');
     const child = await childFor(a, paramId(req));
+    if (child.reading_assignment === 'plan') return fail(409, 'Pakai aplikasi terbaru untuk mengubah daftar tugas.');
     const task = z.union([
       z.object({ kind: z.literal('free') }),
       z.object({ kind: z.literal('quran'), surahId: z.string().refine(isTaskSurah) }),
@@ -335,9 +354,50 @@ export async function createApp(options: Options) {
         book_title=COALESCE(?,CASE WHEN reading_assignment='book' THEN '' ELSE book_title END),
         book_text=COALESCE(?,CASE WHEN reading_assignment='book' THEN '' ELSE book_text END),
         revision=revision+1 WHERE id=?`, values: [task.kind, surahId, book?.title ?? null, book?.text ?? null, child.id] },
-      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Tugas bacaan diganti. Yuk, baca tugas barumu.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [child.id] },
+      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Tugas bacaan diganti. Yuk, baca tugas barumu.' WHERE child_id=? AND task_cycle IS NULL AND used_at IS NULL AND status IN ('pending','approved')", values: [child.id] },
     ]);
     return { child: publicChild(await childFor(a, child.id)) };
+  });
+  app.put('/children/:id/reading-tasks', async req => {
+    const a = await actor(req, 'parent');
+    const child = await childFor(a, paramId(req));
+    const { tasks } = taskPlan.parse(req.body);
+    const plan: ReadingTask[] = tasks.map(task => {
+      const id = randomUUID();
+      if (task.kind === 'quran') {
+        const { firstAyah, lastAyah, surahId } = task;
+        const verseCount = quranText(surahId)!.ayahs.length;
+        if ((firstAyah !== undefined || lastAyah !== undefined) &&
+          (firstAyah === undefined || lastAyah === undefined || firstAyah > lastAyah || lastAyah > verseCount)) {
+          return fail(400, `Pilih rentang ayat dari 1 sampai ${verseCount}.`);
+        }
+        return firstAyah === 1 && lastAyah === verseCount ? { id, kind: 'quran', surahId } : { id, ...task };
+      }
+      const book = 'bookId' in task ? bookTemplates.get(task.bookId) : task;
+      if (!book) return fail(404, 'Cerita tidak ditemukan di Rak Buku.');
+      if (readingWords(book.text).length < 8) return fail(400, 'Masukkan kutipan dengan minimal 8 kata.');
+      return { id, kind: 'book', title: book.title, text: book.text };
+    });
+    const content = (items: ReadingTask[]) => items.map(({ id: _id, ...task }) => JSON.stringify(task));
+    const keys = content(plan);
+    if (new Set(keys).size !== keys.length) return fail(400, 'Setiap tugas harus berbeda.');
+    const assignment = plan.length ? 'plan' : 'free';
+    if (child.reading_assignment === assignment && JSON.stringify(keys) === JSON.stringify(content(tasksFor(child)))) {
+      return { child: publicChild(child) };
+    }
+    const saved = JSON.stringify(plan);
+    await db.batch([
+      { sql: `UPDATE children SET reading_assignment=?,reading_tasks=?,reading_cycle=reading_cycle+1,revision=revision+1,
+        book_title='',book_text='' WHERE id=? AND revision=? AND reading_cycle=?`,
+      values: [assignment, saved, child.id, child.revision, child.reading_cycle] },
+      { sql: `UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Tugas bacaan diganti. Yuk, baca tugas barumu.'
+        WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved') AND (task_cycle IS NULL OR task_cycle=?)
+        AND EXISTS(SELECT 1 FROM children WHERE id=? AND reading_cycle=? AND reading_tasks=?)`,
+      values: [child.id, child.reading_cycle, child.id, child.reading_cycle + 1, saved] },
+    ]);
+    const updated = await childFor(a, child.id);
+    if (updated.reading_tasks !== saved || updated.reading_assignment !== assignment) return fail(409, 'Tugas berubah. Perbarui daftar sebelum menyimpan lagi.');
+    return { child: publicChild(updated) };
   });
   app.get('/dashboard', async req => {
     const a = await actor(req);
@@ -345,7 +405,8 @@ export async function createApp(options: Options) {
     const query = req.query as { quran?: string; reading?: string };
     const extended = query.reading === 'extended';
     const recitationSummary = `SELECT r.id,r.child_id,r.surah_id,r.status,r.duration,r.created_at,r.ready_at,r.reviewed_at,
-      r.expires_at,r.used_at,r.feedback,r.reviewer,r.reading_kind,r.book_title,r.transcript IS NOT NULL AS transcript_available FROM recitations r`;
+      r.expires_at,r.used_at,r.feedback,r.reviewer,r.reading_kind,r.book_title,r.match_score,r.task_id,r.task_cycle,
+      r.first_ayah,r.last_ayah,r.transcript IS NOT NULL AS transcript_available FROM recitations r`;
     const visible = "AND r.status NOT IN ('uploading','failed','deleting') AND (r.reading_kind='quran' OR ?=1)";
     const recs = a.role === 'parent'
       ? await all<Recitation>(`${recitationSummary} JOIN children c ON c.id=r.child_id WHERE c.parent_id=? ${visible} ORDER BY r.created_at DESC LIMIT 100`, a.id, Number(extended))
@@ -354,9 +415,19 @@ export async function createApp(options: Options) {
     const localQuran = query.quran === 'local';
     const surahs = localQuran ? [] : legacySurahs([...children.map(c => c.surah_id), ...recs.map(r => r.surah_id)]);
     const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
-    const firstChild = children[0];
+    let firstChild = children[0];
+    let taskRound;
+    if (a.role === 'child' && firstChild?.reading_assignment === 'plan') {
+      taskRound = await readingRound(firstChild);
+      if (taskRound.permit && taskRound.permit.expiresAt <= now()) {
+        await change('UPDATE children SET reading_cycle=reading_cycle+1 WHERE id=? AND reading_cycle=? AND revision=?',
+          firstChild.id, firstChild.reading_cycle, firstChild.revision);
+        firstChild = children[0] = await childFor(a, firstChild.id);
+        taskRound = firstChild.reading_assignment === 'plan' ? await readingRound(firstChild) : undefined;
+      }
+    }
     const setup = a.role === 'child' && !a.accountLogin && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, readingAssignments: true, bookLibrary: true, storyGeneration: Boolean(options.writeStory), quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, readingAssignments: true, multiReadingTasks: true, activeTaskRecitations: taskRound?.current.map(publicRec) ?? [], taskPermit: taskRound?.permit ?? null, bookLibrary: true, storyGeneration: Boolean(options.writeStory), quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
   });
   app.get('/books/generated', async req => {
     const a = await actor(req, 'child');
@@ -385,25 +456,41 @@ export async function createApp(options: Options) {
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));
-    if ((await one<{ n: number }>("SELECT COUNT(*) n FROM recitations WHERE child_id=? AND status='pending'", c.id))!.n >= 5) return fail(429, 'Masih ada 5 rekaman menunggu. Tunggu orang tua memeriksa dulu.');
+    if (c.reading_assignment !== 'plan' && (await one<{ n: number }>("SELECT COUNT(*) n FROM recitations WHERE child_id=? AND status='pending'", c.id))!.n >= 5) return fail(429, 'Masih ada 5 rekaman menunggu. Tunggu orang tua memeriksa dulu.');
     let buffer: Buffer | undefined; let surahId: string | undefined;
     for await (const part of req.parts()) {
       if (part.type === 'file') { buffer = await part.toBuffer(); if (part.file.truncated) return fail(413, 'Rekaman maksimal 10 MB.'); }
       else if (part.fieldname === 'surahId') surahId = String(part.value);
     }
-    const query = req.query as { selection?: string; kind?: string; revision?: string; bookId?: string };
+    const query = req.query as { selection?: string; kind?: string; revision?: string; bookId?: string; taskId?: string; taskCycle?: string };
     const isBook = query.kind === 'book';
     const selfSelected = query.selection === 'self';
+    const task = c.reading_assignment === 'plan' ? tasksFor(c).find(item => item.id === query.taskId) : undefined;
     if (!buffer?.length) return fail(400, 'Sertakan rekaman bacaanmu.');
     if ((isBook || c.reading_assignment !== 'free' || query.revision !== undefined) && query.revision !== String(c.revision)) {
       return fail(409, 'Aturan bacaan diperbarui. Muat ulang lalu rekam ulang.');
+    }
+    if (c.reading_assignment === 'plan') {
+      if (!task || query.taskCycle !== String(c.reading_cycle)) return fail(409, 'Tugas bacaan diperbarui. Muat ulang dan pilih tugasmu.');
+      if (query.bookId !== undefined || (task.kind === 'book') !== isBook || (task.kind === 'quran' && task.surahId !== surahId)) {
+        return fail(400, 'Kirim rekaman sesuai tugas dari orang tua.');
+      }
+      const round = await readingRound(c);
+      if (round.permit && round.permit.expiresAt <= now()) return fail(409, 'Izin TV kedaluwarsa. Muat ulang untuk memulai tugas lagi.');
+      await change(`UPDATE recitations SET status='rejected',feedback='Rekaman kedaluwarsa. Yuk, baca lagi.'
+        WHERE child_id=? AND task_cycle=? AND task_id=? AND created_at<=? AND status IN ('uploading','pending','approved')`,
+        c.id, c.reading_cycle, task.id, now() - 7 * day);
+    } else if (query.taskId !== undefined || query.taskCycle !== undefined) {
+      return fail(409, 'Tugas bacaan diperbarui. Muat ulang dan pilih bacaan.');
     }
     if (c.reading_assignment === 'quran' && (isBook || surahId !== c.surah_id) ||
         c.reading_assignment === 'book' && (!isBook || query.bookId !== undefined)) {
       return fail(400, 'Kirim rekaman sesuai tugas dari orang tua.');
     }
     let book: { title: string; text: string } | undefined;
-    if (isBook) {
+    if (task?.kind === 'book') {
+      book = task;
+    } else if (isBook) {
       if (query.bookId !== undefined) {
         const { bookId } = z.object({ bookId: z.string().min(1).max(80) }).parse(query);
         book = bookTemplates.get(bookId)
@@ -414,9 +501,14 @@ export async function createApp(options: Options) {
       } else {
         return fail(400, 'Pilih cerita dari rak buku.');
       }
-    } else if (!surahId || (selfSelected ? !isTaskSurah(surahId) : surahId !== c.surah_id)) {
+    } else if (!surahId || (!task && (selfSelected ? !isTaskSurah(surahId) : surahId !== c.surah_id))) {
       return fail(400, selfSelected ? 'Pilih surah Juz 30 dan sertakan rekaman bacaanmu.' : 'Kirim rekaman sesuai surah tugasmu.');
     }
+    const quranTask = task?.kind === 'quran' ? task : undefined;
+    const ayahs = quranTask ? quranPassage(quranTask) : surahId && !isBook ? quranText(surahId)?.ayahs : undefined;
+    const firstAyah = quranTask?.firstAyah ?? null;
+    const lastAyah = quranTask?.lastAyah ?? null;
+    const minSeconds = firstAyah === null ? c.min_seconds : Math.min(c.min_seconds, 5);
     const maxSeconds = isBook ? 180 : taskRecordingLimit(surahId!);
     const id = randomUUID(); const path = join(dataDir, 'tmp', `${id}.audio`);
     await writeFile(path, buffer, { mode: 0o600 });
@@ -425,16 +517,20 @@ export async function createApp(options: Options) {
       const { stdout } = await run('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'mov,wav', '-show_entries', 'format=duration,format_name:stream=codec_type', '-of', 'json', path], { timeout: 10_000, maxBuffer: 64_000 });
       const meta = JSON.parse(stdout);
       duration = Number(meta.format?.duration);
-      if (!Number.isFinite(duration) || duration < c.min_seconds || duration > maxSeconds || !meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'audio') || meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'video')) throw new Error('invalid audio');
+      if (!Number.isFinite(duration) || duration < minSeconds || duration > maxSeconds || !meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'audio') || meta.streams?.some((s: { codec_type: string }) => s.codec_type === 'video')) throw new Error('invalid audio');
       mime = meta.format.format_name === 'wav' ? 'audio/wav' : 'audio/mp4';
     } catch {
-      return fail(400, `Gunakan rekaman audio M4A/WAV sepanjang ${c.min_seconds}–${maxSeconds} detik.`);
+      return fail(400, `Gunakan rekaman audio M4A/WAV sepanjang ${minSeconds}–${maxSeconds} detik.`);
     } finally { await unlink(path).catch(() => {}); }
     const reference = recordings.reference(id, c.id);
-    const inserted = await change(`INSERT INTO recitations(id,child_id,surah_id,status,duration,path,mime,created_at,feedback,reading_kind,book_title,reference_text)
-      SELECT ?,?,?,?,?,?,?,?,?,?,?,? FROM children WHERE id=? AND revision=?`, id, c.id, isBook ? '' : surahId!, 'uploading', duration,
-      reference, mime, now(), 'Menunggu orang tua mendengarkan.', isBook ? 'book' : 'quran', book?.title ?? null, book?.text ?? null, c.id, c.revision);
-    if (!inserted.changes) return fail(409, 'Aturan atau perangkat diperbarui. Muat ulang dan rekam bacaan baru.');
+    const inserted = await change(`INSERT INTO recitations(id,child_id,surah_id,status,duration,path,mime,created_at,feedback,
+      reading_kind,book_title,reference_text,task_id,task_cycle,first_ayah,last_ayah)
+      SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? FROM children WHERE id=? AND revision=? AND reading_cycle=? ON CONFLICT DO NOTHING`,
+      id, c.id, isBook ? '' : surahId!, 'uploading', duration, reference, mime, now(), 'Menunggu orang tua mendengarkan.',
+      isBook ? 'book' : 'quran', book?.title ?? null, book?.text ?? (quranTask ? ayahs?.join('\n') ?? null : null),
+      task?.id ?? null, task ? c.reading_cycle : null, firstAyah, lastAyah, c.id, c.revision, c.reading_cycle);
+    if (!inserted.changes) return fail(409, task ? 'Tugas berubah atau sudah dikirim. Cek statusnya di Beranda.' :
+      'Aturan atau perangkat diperbarui. Muat ulang dan rekam bacaan baru.');
     try {
       await recordings.put(id, c.id, buffer, mime);
     } catch (error) {
@@ -445,7 +541,7 @@ export async function createApp(options: Options) {
     }
     const policyLock = db.kind === 'postgres' ? ' FOR UPDATE' : '';
     const ready = await change(`UPDATE recitations SET status='pending',ready_at=? WHERE id=? AND status='uploading'
-      AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=?${policyLock})`, now(), id, c.id, c.revision);
+      AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=? AND reading_cycle=?${policyLock})`, now(), id, c.id, c.revision, c.reading_cycle);
     if (!ready.changes) {
       await recordings.remove(reference);
       await change('DELETE FROM recitations WHERE id=?', id);
@@ -456,9 +552,10 @@ export async function createApp(options: Options) {
         if (duration > maxAiReadingSeconds) throw Error('Recording exceeds the transcription limit.');
         const transcript = (await options.transcribe(buffer, mime, duration)).trim().slice(0, 8000);
         if (!readingWords(transcript).length) throw Error('No intelligible words.');
-        const score = book ? bookMatchScore(book.text, transcript) : null;
-        const feedback = score === null ? 'Transkripsi siap. Cocokkan dengan teks surah dan dengarkan rekaman.'
-          : score >= bookMatchThreshold ? 'Transkripsi cukup cocok dengan kutipan buku.' : 'Transkripsi perlu dicocokkan ulang dengan kutipan buku.';
+        const score = book ? bookMatchScore(book.text, transcript)
+          : ayahs ? compareQuranReading(ayahs, transcript, (firstAyah ?? 1) === 1).score : null;
+        const feedback = !book ? 'Transkripsi siap. Cocokkan dengan teks surah dan dengarkan rekaman.'
+          : score !== null && score >= bookMatchThreshold ? 'Transkripsi cukup cocok dengan kutipan buku.' : 'Transkripsi perlu dicocokkan ulang dengan kutipan buku.';
         await change("UPDATE recitations SET transcript=?,match_score=?,feedback=? WHERE id=? AND status='pending' AND reviewer IS NULL",
           transcript, score, feedback, id);
       } catch {
@@ -478,7 +575,13 @@ export async function createApp(options: Options) {
     if (r.created_at < now() - 7 * day) return fail(410, 'Rekaman sudah kedaluwarsa.');
     if (['uploading', 'failed', 'deleting'].includes(r.status)) return fail(409, 'Rekaman belum siap dibuka.');
     reply.header('cache-control', 'private, no-store');
-    return { transcript: r.transcript, referenceText: r.reference_text, matchScore: r.match_score, matchThreshold: bookMatchThreshold };
+    const ayahs = r.reading_kind === 'quran' ? r.reference_text?.split('\n') ?? quranText(r.surah_id)?.ayahs : undefined;
+    const comparison = ayahs && r.transcript ? compareQuranReading(ayahs, r.transcript, (r.first_ayah ?? 1) === 1) : null;
+    return {
+      transcript: r.transcript, referenceText: r.reference_text,
+      ...(comparison && { vocalizedTranscript: comparison.vocalizedTranscript }),
+      matchScore: r.match_score ?? comparison?.score ?? null, matchThreshold: bookMatchThreshold,
+    };
   });
   app.post('/recitations/:id/review', async req => {
     const a = await actor(req, 'parent'); const r = (await recFor(a, paramId(req))); const c = (await childFor(a, r.child_id));
@@ -486,7 +589,12 @@ export async function createApp(options: Options) {
     const approved = decision === 'approve';
     if (r.created_at < now() - 7 * day) return fail(410, 'Rekaman sudah kedaluwarsa.');
     const reviewTime = now();
-    const updated = await change("UPDATE recitations SET status=?,expires_at=?,reviewer='parent',feedback=?,reviewed_at=? WHERE id=? AND status='pending' AND used_at IS NULL", approved ? 'approved' : 'rejected', approved ? reviewTime + c.unlock_minutes * 60_000 : null, approved ? 'Disetujui orang tua. Terima kasih sudah membaca!' : 'Yuk, coba baca lagi. Orang tua ingin mendengar lebih jelas.', reviewTime, r.id);
+    const updated = await change(`UPDATE recitations SET status=?,expires_at=?,reviewer='parent',feedback=?,reviewed_at=?
+      WHERE id=? AND status='pending' AND used_at IS NULL
+      AND EXISTS(SELECT 1 FROM children WHERE id=? AND revision=? AND reading_cycle=?)`,
+      approved ? 'approved' : 'rejected', approved && !r.task_id ? reviewTime + c.unlock_minutes * 60_000 : null,
+      approved ? 'Disetujui orang tua. Terima kasih sudah membaca!' : 'Yuk, coba baca lagi. Orang tua ingin mendengar lebih jelas.',
+      reviewTime, r.id, c.id, c.revision, r.task_cycle ?? c.reading_cycle);
     if (!updated.changes) return fail(409, 'Rekaman ini sudah diperiksa.');
     return { recitation: publicRec((await one<Recitation>('SELECT * FROM recitations WHERE id=?', r.id))!) };
   });
@@ -533,6 +641,18 @@ export async function createApp(options: Options) {
     if (tvTransport !== c.tv_transport || tvRevision !== undefined && tvRevision !== c.revision) return fail(409, 'Pengaturan TV berubah. Muat ulang lalu coba lagi.');
     if (c.tv_transport === 'infrared' && c.tv_brand === 'none') return fail(400, 'Pilih TV dulu.');
     if (c.tv_transport === 'wifi' && (c.tv_platform === 'wol' ? !c.tv_mac : !isPrivateIpv4(c.tv_host))) return fail(400, 'Lengkapi sambungan Wi-Fi TV dulu.');
+    if (c.reading_assignment === 'plan') {
+      const at = now();
+      const used = await change(`UPDATE children SET reading_cycle=reading_cycle+1 WHERE id=? AND revision=? AND reading_cycle=?
+        AND EXISTS(SELECT 1 FROM recitations WHERE id=? AND child_id=? AND task_cycle=? AND task_id IS NOT NULL AND status='approved')
+        AND EXISTS(SELECT COUNT(DISTINCT task_id) FROM recitations WHERE child_id=? AND task_cycle=? AND task_id IS NOT NULL
+          AND status='approved' AND created_at>?
+          HAVING COUNT(DISTINCT task_id)=? AND MAX(reviewed_at)>?)`,
+        c.id, c.revision, c.reading_cycle, r.id, c.id, c.reading_cycle, c.id, c.reading_cycle,
+        at - 7 * day, tasksFor(c).length, at - c.unlock_minutes * 60_000);
+      if (!used.changes) return fail(403, 'Selesaikan semua tugas. Izin TV berlaku satu kali setelah semua bacaan disetujui.');
+      return powerPermit(c);
+    }
     const used = await change(`UPDATE recitations SET used_at=? WHERE id=? AND child_id=? AND status='approved'
       AND used_at IS NULL AND expires_at>? AND created_at>? AND EXISTS(SELECT 1 FROM children c WHERE c.id=? AND c.revision=?)`,
       now(), r.id, c.id, now(), now() - 7 * day, c.id, c.revision);

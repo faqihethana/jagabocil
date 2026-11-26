@@ -103,7 +103,7 @@ internal class ReviewNotifications(context: Context) {
     private fun post(notice: ReviewNotice): Boolean {
         if (!permitted()) return false
         val text = when (notice.kind) {
-            "pending" -> "Ada rekaman ngaji baru untuk diperiksa."
+            "pending" -> "Ada rekaman bacaan baru untuk diperiksa."
             "approved" -> "Bacaanmu disetujui. Lihat hasilnya di JagaBocil."
             else -> "Bacaanmu perlu diulang. Lihat hasilnya di JagaBocil."
         }

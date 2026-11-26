@@ -67,7 +67,7 @@ class Api(var token: String = "") {
             it.body?.byteStream()?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
         }
     }
-    suspend fun upload(file: File, surahId: String?, revision: Int?, bookId: String?): String {
+    suspend fun upload(file: File, surahId: String?, revision: Int?, bookId: String?, taskId: String?, taskCycle: Int?): String {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
         if (surahId != null) body.addFormDataPart("surahId", surahId)
         body.addFormDataPart("audio", "bacaan.m4a", file.asRequestBody("audio/mp4".toMediaType()))
@@ -75,6 +75,7 @@ class Api(var token: String = "") {
             append(if (surahId == null) "/recitations?kind=book" else "/recitations?selection=self")
             if (revision != null) append("&revision=$revision")
             if (bookId != null) append("&bookId=$bookId")
+            if (taskId != null) append("&taskId=$taskId&taskCycle=$taskCycle")
         }
         return request(path, "POST", body.build())
     }

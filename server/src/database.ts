@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 8;
+const schemaVersion = 9;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -116,6 +116,19 @@ export const migration = (schema: string) => {
     `DO $migration$
     BEGIN
       ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS reading_assignment TEXT NOT NULL DEFAULT 'free';
+      INSERT INTO ${s}.schema_migrations(version) VALUES(8) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS reading_tasks TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS reading_cycle INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS task_id TEXT;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS task_cycle INTEGER;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS first_ayah INTEGER;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS last_ayah INTEGER;
+      CREATE UNIQUE INDEX IF NOT EXISTS recitations_active_task ON ${s}.recitations(child_id,task_cycle,task_id)
+        WHERE task_id IS NOT NULL AND status IN ('uploading','pending','approved');
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

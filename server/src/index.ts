@@ -1,5 +1,4 @@
 import { createApp } from './app.js';
-import { createGeminiStoryWriter, createGeminiTranscriber } from './ai.js';
 import { createDeepSeekStoryWriter, createDeepSeekTranscriber } from './deepseek.js';
 import { postgresDatabase } from './database.js';
 import { s3Recordings, verifyPrivateS3 } from './recordings.js';
@@ -19,19 +18,14 @@ const database = process.env.DATABASE_URL
   ? await postgresDatabase(process.env.DATABASE_URL, process.env.DATABASE_SCHEMA || 'jagabocil', process.env.DATABASE_AUTO_MIGRATE === 'true')
   : undefined;
 const deepSeekKey = process.env.DEEPSEEK_API_KEY?.trim();
-const geminiKey = process.env.GEMINI_API_KEY?.trim();
-const geminiModel = process.env.AI_MODEL || 'gemini-4-hydrogen';
 
 const app = await createApp({
   dataDir: process.env.DATA_DIR || './data', logger: true,
   database,
   midtrans,
   recordings: useS3 ? s3Recordings(s3) : undefined,
-  aiProvider: deepSeekKey ? 'deepseek' : 'gemini',
-  transcribe: deepSeekKey ? createDeepSeekTranscriber(deepSeekKey)
-    : geminiKey ? createGeminiTranscriber(geminiKey, geminiModel) : undefined,
-  writeStory: deepSeekKey ? createDeepSeekStoryWriter(deepSeekKey)
-    : geminiKey ? createGeminiStoryWriter(geminiKey, geminiModel) : undefined,
+  transcribe: deepSeekKey ? createDeepSeekTranscriber(deepSeekKey) : undefined,
+  writeStory: deepSeekKey ? createDeepSeekStoryWriter(deepSeekKey) : undefined,
 });
 await app.listen({ host: process.env.HOST || '0.0.0.0', port: Number(process.env.PORT || 8787) });
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { void app.close(); });

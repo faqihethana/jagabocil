@@ -41,6 +41,12 @@ export function sqliteDatabase(path: string): Database {
     if (!recordingColumns.has('reference_text')) db.exec('ALTER TABLE recitations ADD COLUMN reference_text TEXT');
     if (!recordingColumns.has('transcript')) db.exec('ALTER TABLE recitations ADD COLUMN transcript TEXT');
     if (!recordingColumns.has('match_score')) db.exec('ALTER TABLE recitations ADD COLUMN match_score INTEGER');
+    if (!recordingColumns.has('task_id')) db.exec('ALTER TABLE recitations ADD COLUMN task_id TEXT');
+    if (!recordingColumns.has('task_cycle')) db.exec('ALTER TABLE recitations ADD COLUMN task_cycle INTEGER');
+    if (!recordingColumns.has('first_ayah')) db.exec('ALTER TABLE recitations ADD COLUMN first_ayah INTEGER');
+    if (!recordingColumns.has('last_ayah')) db.exec('ALTER TABLE recitations ADD COLUMN last_ayah INTEGER');
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS recitations_active_task ON recitations(child_id,task_cycle,task_id)
+      WHERE task_id IS NOT NULL AND status IN ('uploading','pending','approved')`);
     const columns = new Set(db.prepare('PRAGMA table_info(children)').all().map(column => column.name));
     if (!columns.has('tv_transport')) db.exec("ALTER TABLE children ADD COLUMN tv_transport TEXT NOT NULL DEFAULT 'infrared'");
     if (!columns.has('tv_mac')) db.exec("ALTER TABLE children ADD COLUMN tv_mac TEXT NOT NULL DEFAULT ''");
@@ -52,6 +58,8 @@ export function sqliteDatabase(path: string): Database {
     if (!columns.has('book_title')) db.exec("ALTER TABLE children ADD COLUMN book_title TEXT NOT NULL DEFAULT ''");
     if (!columns.has('book_text')) db.exec("ALTER TABLE children ADD COLUMN book_text TEXT NOT NULL DEFAULT ''");
     if (!columns.has('reading_assignment')) db.exec("ALTER TABLE children ADD COLUMN reading_assignment TEXT NOT NULL DEFAULT 'free'");
+    if (!columns.has('reading_tasks')) db.exec("ALTER TABLE children ADD COLUMN reading_tasks TEXT NOT NULL DEFAULT '[]'");
+    if (!columns.has('reading_cycle')) db.exec('ALTER TABLE children ADD COLUMN reading_cycle INTEGER NOT NULL DEFAULT 0');
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS children_username ON children(username) WHERE username IS NOT NULL');
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }

@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { transcriptionSchema, type Transcribe } from './ai.js';
 import { storyPrompt, storySchema, storySystem, type WriteStory } from './book-library.js';
 
+export type Transcribe = (audio: Buffer, mediaType: string, duration: number) => Promise<string>;
+const transcriptionSchema = z.object({ text: z.string() });
 const run = promisify(execFile);
 export function createDeepSeekTranscriber(key: string, fetchAudio = globalThis.fetch): Transcribe {
   return async (audio, _mediaType, duration) => {

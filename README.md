@@ -7,14 +7,14 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 ## Yang sudah tersedia
 
 - Orang tua membuat akun anak dari menu **Keluarga**. Anak masuk dengan username dan kata sandinya sendiri. Username baru terdiri dari 3–32 karakter, dengan kata sandi minimal 4 karakter.
-- Orang tua membuka **Beranda → Atur bacaan** untuk memilih satu surah Juz 30, cerita dari **Rak Buku**, atau teks sendiri. Bacaan langsung menjadi tugas di Beranda anak sampai orang tua menggantinya. Opsi **Anak pilih sendiri** memberi anak pilihan surah atau cerita sebelum merekam.
+- Orang tua membuka **Beranda → Atur bacaan** untuk menyiapkan sampai 10 tugas. Satu daftar bisa berisi surah Juz 30 penuh, satu ayat atau rentang ayat, cerita dari **Rak Buku**, dan teks sendiri. Anak mengerjakan tugas dari Beranda dalam urutan bebas. Daftar kosong memberi anak pilihan bacaan sendiri.
 - **Rak Buku** menyediakan 24 cerita pendek dalam tema hewan, alam, sehari-hari, dan persahabatan. Cerita bawaan bisa dibuka tanpa login atau internet. Anak yang sudah masuk bisa membuat satu versi AI per template. Versi tersebut disimpan di akun anak dan bisa dipakai untuk tugas baca.
 - Menu **Al-Qur’an** dapat dibuka sebelum masuk. Juz 30 ikut di dalam APK. Untuk 77 surah lainnya, pilih surah dan tekan **Unduh surah**. Teks yang sudah diunduh tersimpan per HP dan dapat dibaca lagi tanpa internet.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
-- Notifikasi Android untuk rekaman baru dan hasil review. Aktifkan di **Keluarga** pada HP orang tua dan di **Panduan** pada HP anak. Aplikasi memeriksa saat dibuka dan memakai pekerjaan berkala saat di latar belakang. Android menjadwalkan pekerjaan tersebut dengan interval minimal 15 menit dan bisa menundanya.
-- Kode pemulihan sekali pakai tanpa email. Orang tua membuat kode di **Keluarga → Pemulihan akun** dengan kata sandi saat ini. Simpan kode saat ditampilkan. Untuk menggunakannya, pilih **Lupa kata sandi?** di layar masuk. Setelah berhasil, sesi lama akun orang tua berakhir dan perangkat anak tetap terhubung.
-- Jika **Bantuan AI** aktif, orang tua mendapat transkripsi ngaji untuk dicocokkan dengan teks surah. Untuk buku, JagaBocil menampilkan transkripsi dan kemiripan kata dengan teks cerita, memakai ambang awal 65%. Penghitungan mengabaikan kapitalisasi dan tanda baca. Orang tua menyetujui pengiriman audio dan penyimpanan transkripsi, lalu memutuskan hasil bacaan.
-- Izin server berlaku 1–60 menit setelah disetujui dan dikonsumsi atomik sekali saja. Mengganti aturan, mencabut perangkat, atau menghapus rekaman membatalkan izin yang belum dipakai.
+- Notifikasi Android untuk rekaman baru dan hasil review. Aktifkan di **Menu akun → Pengaturan akun** pada HP orang tua dan di **Panduan** pada HP anak. Aplikasi memeriksa saat dibuka dan memakai pekerjaan berkala saat di latar belakang. Android menjadwalkan pekerjaan tersebut dengan interval minimal 15 menit dan bisa menundanya.
+- Kode pemulihan sekali pakai tanpa email. Orang tua membuat kode di **Pengaturan akun → Pemulihan akun** dengan kata sandi saat ini. Simpan kode saat ditampilkan. Untuk menggunakannya, pilih **Lupa kata sandi?** di layar masuk. Setelah berhasil, sesi lama akun orang tua berakhir dan perangkat anak tetap terhubung.
+- Jika **Bantuan AI** aktif, orang tua mendapat transkripsi dan perkiraan kemiripan kata dengan teks surah atau cerita. Transkripsi ngaji memakai harakat dari teks surah pada kata yang cocok. Orang tua mengizinkan pengiriman audio dan penyimpanan transkripsi, lalu memutuskan hasil bacaan.
+- Setelah semua tugas disetujui, izin TV berlaku 1–60 menit dan hanya bisa dipakai sekali. Jika izin dipakai atau kedaluwarsa, daftar tugas siap dikerjakan lagi. Mengganti tugas atau aturan, mencabut perangkat, atau menghapus rekaman terkait membatalkan izin yang belum dipakai.
 - Dua metode koneksi: **infrared** Samsung/LG 38 kHz atau **Wi-Fi lokal**. Pilihan platform Wi-Fi: Android TV/Google TV (Remote Service v2), Samsung Tizen (WSS), LG webOS (SSAP/WSS), dan Wake-on-LAN. Driver jaringan masih perlu pengujian pada TV fisik; lihat [matriks kompatibilitas](docs/tv-compatibility.md).
 - Riwayat, pemutaran audio privat, penghapusan oleh orang tua, dan pencabutan sesi anak. Antrean orang tua dan status bacaan yang menunggu diperbarui di belakang layar saat tampilan terkait aktif.
 
@@ -45,9 +45,9 @@ npm run dev
 
 API tersedia di `http://localhost:8787`. `GET /health` menampilkan jenis database, penyimpanan audio, dan penyedia AI aktif tanpa login. `.env.local` yang gitignored dapat menimpa konfigurasi `.env`. Tanpa `DATABASE_URL`, data lokal tersimpan di `server/data/`. Dengan URL, API memakai schema `jagabocil` di PostgreSQL. Lihat [setup Neon dan S3](docs/backend-storage.md).
 
-Isi `DEEPSEEK_API_KEY` di environment server untuk menggunakan [DeepSeek Speech to Text](https://api-docs.deepseek.com/guides/asr/). Server mengubah rekaman hingga 120 detik ke PCM WAV sebelum dikirim. JagaBocil menyimpan transkripsi privat bersama metadata rekaman. Rekaman yang lebih panjang atau gagal ditranskripsi tetap masuk antrean orang tua. Orang tua perlu mengaktifkan ulang izin AI setelah pembaruan fitur ini atau pergantian penyedia.
+Isi `DEEPSEEK_API_KEY` di environment server untuk mengaktifkan [DeepSeek Speech to Text](https://api-docs.deepseek.com/guides/asr/) dan pembuatan cerita. Server mengubah rekaman hingga 120 detik ke PCM WAV sebelum dikirim. JagaBocil menyimpan transkripsi privat bersama metadata rekaman. Mode manual tetap tersedia saat kunci kosong, rekaman terlalu panjang, atau transkripsi gagal. Izin AI dari penyedia sebelumnya perlu diaktifkan ulang oleh orang tua.
 
-Jika `DEEPSEEK_API_KEY` kosong, server dapat memakai `GEMINI_API_KEY`. `AI_MODEL` memilih model Gemini yang mendukung audio dan structured output pada Interactions API. Default-nya `gemini-4-hydrogen` dan interaksi dikirim dengan `store: false`. Simpan semua key di environment server.
+Hasil AI menampilkan perkiraan kemiripan kata dengan teks surah atau kutipan buku. Harakat diambil dari teks surah untuk kata yang cocok dengan transkripsi. Orang tua memeriksa rekaman dan memutuskan izin TV.
 
 Pembuatan versi cerita AI memakai kunci penyedia yang sama. Permintaan berisi judul dan tema template. Jika pembuatan gagal atau penyedia belum dikonfigurasi, anak tetap bisa memakai cerita bawaan.
 
@@ -59,7 +59,7 @@ docker compose up --build -d
 
 Compose membuka port hanya pada loopback. Pasang reverse proxy HTTPS untuk pemakaian dari dua HP. Untuk cloud, isi `DATABASE_URL`, jalankan migrasi dengan URL direct, dan set `AUDIO_STORE=s3` beserta konfigurasi AWS. SQLite/audio lokal menggunakan volume `family-data` dan membutuhkan satu instance dengan disk persisten. Pada Neon/S3, disk lokal dipakai sementara oleh ffprobe; data utama tersimpan di layanan cloud. Backup, HTTPS, dan deployment hosting tetap perlu disiapkan.
 
-Untuk AI pada Docker, ekspor `DEEPSEEK_API_KEY` atau `GEMINI_API_KEY` di shell atau isi `.env` di **root repo** sebelum menjalankan Compose. File `server/.env` dipakai oleh perintah npm.
+Untuk AI pada Docker, ekspor `DEEPSEEK_API_KEY` di shell atau isi `.env` di **root repo** sebelum menjalankan Compose. File `server/.env` dipakai oleh perintah npm.
 
 ## Menjalankan Android
 
@@ -72,7 +72,7 @@ cd android
 
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
-1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Penetapan tugas oleh orang tua memerlukan aplikasi dan API terbaru serta schema PostgreSQL versi 8.
+1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Daftar tugas dan pilihan ayat memerlukan aplikasi dan API terbaru serta schema PostgreSQL versi 9.
 2. Masuk sebagai **Orang tua** dan buat akun anak. Untuk profil lama, buka **Keluarga → Siapkan login anak** agar profil dan riwayat tetap dipakai.
 3. Di HP orang tua, ketuk **Atur bacaan** di Beranda. Pilih **Ngaji** atau **Baca buku**, tentukan bacaannya, lalu ketuk **Simpan tugas**.
 4. Di HP anak, masuk lewat **Aku anak**. Bacaan dari orang tua langsung tampil di Beranda. Jika orang tua mengaktifkan **Anak pilih sendiri**, anak bisa memilih surah atau memakai cerita dari Rak Buku dengan tombol **Pakai untuk izin TV**. Rekam, dengarkan bila perlu, lalu pilih **Kirim bacaan**.
