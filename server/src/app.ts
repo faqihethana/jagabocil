@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { isTaskSurah, legacySurahs, quranNotice, quranText, taskRecordingLimit } from './catalog.js';
 import type { Transcribe } from './ai.js';
 import { bookMatchScore, bookMatchThreshold, maxAiReadingSeconds, readingWords } from './book-reading.js';
+import { bookTemplates, storySchema, type WriteStory } from './book-library.js';
 import { billing } from './billing.js';
 import type { Midtrans } from './midtrans.js';
 
@@ -40,7 +41,9 @@ type Child = { id: string; parent_id: string; name: string; username: string | n
 type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null; reading_kind: 'quran' | 'book'; book_title: string | null; reference_text: string | null; transcript: string | null; match_score: number | null; transcript_available?: boolean | number };
 // Values 1 and 2 covered sending audio without keeping transcripts.
 const aiConsentByProvider = { gemini: 3, deepseek: 4 } as const;
-type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; transcribe?: Transcribe; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
+type GeneratedBook = { id: string; template_id: string; title: string; text: string };
+const publicStory = (book: GeneratedBook) => ({ id: book.id, templateId: book.template_id, title: book.title, text: book.text });
+type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; transcribe?: Transcribe; writeStory?: WriteStory; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
 class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }
 const fail = (code: number, message: string): never => { throw new HttpError(code, message); };
 
@@ -320,7 +323,32 @@ export async function createApp(options: Options) {
     const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
     const firstChild = children[0];
     const setup = a.role === 'child' && !a.accountLogin && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, bookLibrary: true, storyGeneration: Boolean(options.writeStory), quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
+  });
+  app.get('/books/generated', async req => {
+    const a = await actor(req, 'child');
+    const books = await all<GeneratedBook>('SELECT id,template_id,title,text FROM generated_books WHERE child_id=? ORDER BY template_id', a.id);
+    return { books: books.map(publicStory) };
+  });
+  app.post('/books/generated', { config: { rateLimit: { max: 12, timeWindow: '1 hour' } } }, async (req, reply) => {
+    const a = await actor(req, 'child');
+    const { templateId } = z.object({ templateId: z.string().max(80) }).parse(req.body);
+    const template = bookTemplates.get(templateId);
+    if (!template) return fail(404, 'Template cerita tidak ditemukan.');
+    const findStory = () => one<GeneratedBook>('SELECT id,template_id,title,text FROM generated_books WHERE child_id=? AND template_id=?', a.id, templateId);
+    const existing = await findStory();
+    if (existing) return { book: publicStory(existing) };
+    if (!options.writeStory) return reply.code(503).send({ message: 'Versi AI belum tersedia. Cerita bawaan tetap bisa dibaca.' });
+    let story;
+    try {
+      story = storySchema.parse(await options.writeStory(template));
+    } catch {
+      app.log.warn('Book generation failed');
+      return reply.code(502).send({ message: 'Cerita AI belum berhasil dibuat. Coba lagi atau baca versi bawaan.' });
+    }
+    await change('INSERT INTO generated_books(id,child_id,template_id,title,text) VALUES(?,?,?,?,?) ON CONFLICT(child_id,template_id) DO NOTHING',
+      randomUUID(), a.id, templateId, story.title, story.text);
+    return { book: publicStory((await findStory())!) };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));
@@ -330,13 +358,23 @@ export async function createApp(options: Options) {
       if (part.type === 'file') { buffer = await part.toBuffer(); if (part.file.truncated) return fail(413, 'Rekaman maksimal 10 MB.'); }
       else if (part.fieldname === 'surahId') surahId = String(part.value);
     }
-    const query = req.query as { selection?: string; kind?: string; revision?: string };
+    const query = req.query as { selection?: string; kind?: string; revision?: string; bookId?: string };
     const isBook = query.kind === 'book';
     const selfSelected = query.selection === 'self';
     if (!buffer?.length) return fail(400, 'Sertakan rekaman bacaanmu.');
+    let book: { title: string; text: string } | undefined;
     if (isBook) {
       if (query.revision !== String(c.revision)) return fail(409, 'Aturan bacaan diperbarui. Muat ulang lalu rekam ulang.');
-      if (!c.book_title || !c.book_text) return fail(400, 'Minta orang tua menyiapkan kutipan buku terlebih dahulu.');
+      if (query.bookId !== undefined) {
+        const { bookId } = z.object({ bookId: z.string().min(1).max(80) }).parse(query);
+        book = bookTemplates.get(bookId)
+          ?? await one<GeneratedBook>('SELECT title,text FROM generated_books WHERE id=? AND child_id=?', bookId, c.id);
+        if (!book) return fail(404, 'Cerita tidak ditemukan. Pilih lagi dari rak buku.');
+      } else if (c.book_title && c.book_text) {
+        book = { title: c.book_title, text: c.book_text };
+      } else {
+        return fail(400, 'Pilih cerita dari rak buku.');
+      }
     } else if (!surahId || (selfSelected ? !isTaskSurah(surahId) : surahId !== c.surah_id)) {
       return fail(400, selfSelected ? 'Pilih surah Juz 30 dan sertakan rekaman bacaanmu.' : 'Kirim rekaman sesuai surah tugasmu.');
     }
@@ -356,7 +394,7 @@ export async function createApp(options: Options) {
     const reference = recordings.reference(id, c.id);
     const inserted = await change(`INSERT INTO recitations(id,child_id,surah_id,status,duration,path,mime,created_at,feedback,reading_kind,book_title,reference_text)
       SELECT ?,?,?,?,?,?,?,?,?,?,?,? FROM children WHERE id=? AND revision=?`, id, c.id, isBook ? '' : surahId!, 'uploading', duration,
-      reference, mime, now(), 'Menunggu orang tua mendengarkan.', isBook ? 'book' : 'quran', isBook ? c.book_title : null, isBook ? c.book_text : null, c.id, c.revision);
+      reference, mime, now(), 'Menunggu orang tua mendengarkan.', isBook ? 'book' : 'quran', book?.title ?? null, book?.text ?? null, c.id, c.revision);
     if (!inserted.changes) return fail(409, 'Aturan atau perangkat diperbarui. Muat ulang dan rekam bacaan baru.');
     try {
       await recordings.put(id, c.id, buffer, mime);
@@ -377,7 +415,7 @@ export async function createApp(options: Options) {
         if (duration > maxAiReadingSeconds) throw Error('Recording exceeds the transcription limit.');
         const transcript = (await options.transcribe(buffer, mime, duration)).trim().slice(0, 8000);
         if (!readingWords(transcript).length) throw Error('No intelligible words.');
-        const score = isBook ? bookMatchScore(c.book_text, transcript) : null;
+        const score = book ? bookMatchScore(book.text, transcript) : null;
         const feedback = score === null ? 'Transkripsi siap. Cocokkan dengan teks surah dan dengarkan rekaman.'
           : score >= bookMatchThreshold ? 'Transkripsi cukup cocok dengan kutipan buku.' : 'Transkripsi perlu dicocokkan ulang dengan kutipan buku.';
         await change("UPDATE recitations SET transcript=?,match_score=?,feedback=? WHERE id=? AND status='pending' AND reviewer IS NULL",

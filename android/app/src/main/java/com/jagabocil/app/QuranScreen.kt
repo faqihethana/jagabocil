@@ -81,12 +81,12 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
         }
     } else {
         Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
-            QuranHeader("Al-Qur’an", onExit)
+            LibraryHeader("Al-Qur’an", onExit)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !outsideJuz, onClick = { outsideJuz = false }, label = { Text("Juz 30") })
                 FilterChip(selected = outsideJuz, onClick = { outsideJuz = true }, label = { Text("Surah lainnya") })
             }
-            QuranSearch(query) { query = it }
+            LibrarySearch(query, "Cari nama atau nomor surah") { query = it }
             val entries = remember(outsideJuz, query, library) {
                 library.chapters.filter { (it.ayahs == null) == outsideJuz && it.matches(query) }
             }
@@ -125,7 +125,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
         loading = false
     }
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().padding(horizontal = 20.dp)) {
-        QuranHeader(chapter.name, onBack)
+        LibraryHeader(chapter.name, onBack)
         Text("${chapter.verses} ayat", Modifier.padding(start = 12.dp, bottom = 10.dp))
         val text = ayahs
         if (text != null) {
@@ -178,7 +178,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
         onDismissRequest = onDismiss, title = { Text("Pilih surah Juz 30") },
         text = {
             Column {
-                QuranSearch(query) { query = it }
+                LibrarySearch(query, "Cari nama atau nomor surah") { query = it }
                 LazyColumn(Modifier.heightIn(max = 340.dp)) {
                     if (visible.isEmpty()) item { Text("Surah tidak ditemukan.", Modifier.padding(vertical = 16.dp)) }
                     items(visible, key = { it.id }) { chapter ->
@@ -191,9 +191,9 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
     )
 }
 
-@Composable private fun QuranSearch(query: String, onChange: (String) -> Unit) {
+@Composable internal fun LibrarySearch(query: String, label: String, onChange: (String) -> Unit) {
     OutlinedTextField(
-        value = query, onValueChange = onChange, label = { Text("Cari nama atau nomor surah") }, shape = RoundedCornerShape(16.dp),
+        value = query, onValueChange = onChange, label = { Text(label) }, shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth(), singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
@@ -222,7 +222,7 @@ private val Arabic = FontFamily(Font(R.font.amiri_quran))
     }
 }
 
-@Composable private fun QuranHeader(title: String, onBack: () -> Unit) {
+@Composable internal fun LibraryHeader(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
         SectionTitle(title)

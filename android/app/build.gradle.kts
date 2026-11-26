@@ -17,8 +17,8 @@ android {
         applicationId = "com.jagabocil.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.2.8"
+        versionCode = 11
+        versionName = "0.2.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -64,8 +64,22 @@ val bundleQuran = tasks.register<BundleQuran>("bundleQuran") {
     snapshot.set(rootProject.layout.projectDirectory.file("../server/src/quran.json"))
     outputDirectory.set(layout.buildDirectory.dir("generated/quran-assets"))
 }
+abstract class BundleBooks : DefaultTask() {
+    @get:InputFile abstract val catalog: RegularFileProperty
+    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction fun bundle() {
+        catalog.get().asFile.copyTo(outputDirectory.file("book-catalog.json").get().asFile, overwrite = true)
+    }
+}
+
+val bundleBooks = tasks.register<BundleBooks>("bundleBooks") {
+    catalog.set(rootProject.layout.projectDirectory.file("../server/src/book-catalog.json"))
+    outputDirectory.set(layout.buildDirectory.dir("generated/book-assets"))
+}
 androidComponents.onVariants { variant ->
     variant.sources.assets?.addGeneratedSourceDirectory(bundleQuran, BundleQuran::outputDirectory)
+    variant.sources.assets?.addGeneratedSourceDirectory(bundleBooks, BundleBooks::outputDirectory)
 }
 
 dependencies {

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGeminiTranscriber } from '../src/ai.js';
-import { createDeepSeekTranscriber } from '../src/deepseek.js';
+import { createDeepSeekStoryWriter, createDeepSeekTranscriber } from '../src/deepseek.js';
+import { bookTemplates } from '../src/book-library.js';
 import { wav } from './fixtures.js';
 
 test('Gemini adapter sends inline audio, stateless interaction, and JSON schema through the installed SDK', async () => {
@@ -44,4 +45,19 @@ test('DeepSeek receives PCM WAV and returns the provider transcript', async () =
   });
   assert.equal(await transcribe(wav(11), 'audio/wav', 11), transcript);
   await assert.rejects(transcribe(wav(11), 'audio/wav', 121), /cannot be sent/);
+});
+
+test('DeepSeek story writer requests JSON and uses the template topic as its only user input', async () => {
+  const template = bookTemplates.get('bayangan-pagi')!;
+  const { title, text } = template;
+  const writeStory = createDeepSeekStoryWriter('test-key-only', async (url, init) => {
+    assert.equal(url, 'https://api.deepseek.com/chat/completions');
+    const payload = JSON.parse(String(init?.body));
+    assert.equal(payload.model, 'deepseek-flash');
+    assert.deepEqual(payload.response_format, { type: 'json_object' });
+    assert.deepEqual(payload.messages[1], { role: 'user', content: 'Tema: Alam. Topik template: Bayangan Pagi.' });
+    assert.ok(!String(init?.body).includes(text));
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ title, text }) } }] });
+  });
+  assert.deepEqual(await writeStory(template), { title, text });
 });

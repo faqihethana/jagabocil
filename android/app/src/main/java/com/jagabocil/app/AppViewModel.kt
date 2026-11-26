@@ -27,6 +27,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SessionStore(application)
     val api = Api(store.token())
     internal val quran = QuranLibrary(application)
+    internal val bookTemplates: List<Story> by lazy {
+        application.assets.open("book-catalog.json").bufferedReader().use { api.json.decodeFromString(it.readText()) }
+    }
     val infrared = Infrared(application)
     val wifiTv = WifiTv(application)
     val tvRemote = TvWifiRemote(application, wifiTv)
@@ -44,6 +47,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var lastLoadedAt = 0L
     private var recordedSurahId: String? = null
     private var recordedBookRevision: Int? = null
+    private var recordedBookId: String? = null
+    private var loadedStoryOwner: String? = null
     private var clockOffset = 0L
     var dashboard by mutableStateOf<Dashboard?>(null); private set
     var busy by mutableStateOf(false); private set
@@ -55,6 +60,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var playing by mutableStateOf<String?>(null); private set
     var selectedSurahId by mutableStateOf<String?>(null); private set
     var readingBook by mutableStateOf(false); private set
+    internal var selectedBook by mutableStateOf<Story?>(null); private set
+    internal var generatedStories by mutableStateOf<Map<String, Story>>(emptyMap()); private set
     var tvPaired by mutableStateOf(false); private set
     private var tvReturnScreen = "home"
     private var reviewFromNotification: String? = null
@@ -92,6 +99,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         recoveryCode = null
         selectedSurahId = null
         readingBook = false
+        selectedBook = null
+        generatedStories = emptyMap()
+        loadedStoryOwner = null
         tvPaired = false
         tvReturnScreen = "home"
         lastLoadedAt = 0L
@@ -269,12 +279,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun selectReading(book: Boolean) {
         if (!recording && recordedFile == null && !busy) readingBook = book
     }
+    internal fun selectBook(book: Story) {
+        if (recording || recordedFile != null || busy || dashboard?.role != "child") return
+        selectedBook = book
+        readingBook = true
+        screen = "home"
+    }
+    internal suspend fun loadGeneratedStories(childId: String) {
+        if (loadedStoryOwner == childId) return
+        val session = api.token
+        val books = api.generatedStories()
+        coroutineContext.ensureActive()
+        if (session != api.token || dashboard?.children?.firstOrNull()?.id != childId) return
+        generatedStories = books.mapNotNull { book -> book.templateId?.let { it to book } }.toMap() + generatedStories
+        loadedStoryOwner = childId
+    }
+    internal suspend fun generateStory(templateId: String) {
+        val session = api.token
+        val book = api.writeStory(templateId)
+        coroutineContext.ensureActive()
+        if (session == api.token) generatedStories = generatedStories + (templateId to book)
+    }
     fun startRecording() {
         if (busy || recording) return
         val data = dashboard ?: return
         val child = data.children.firstOrNull() ?: return
-        val useBook = data.readingActivities && readingBook
-        val bookRevision = if (useBook) child.tvRevision?.takeIf { child.bookReading != null } ?: return else null
+        val useBook = data.bookLibrary && readingBook
+        val book = if (useBook) selectedBook ?: return else null
+        val bookRevision = if (useBook) child.tvRevision ?: return else null
         val chapter = if (useBook) null else quran.chapter(selectedSurahId ?: child.surahId) ?: return
         val maxSeconds = chapter?.maxRecordingSeconds ?: 180
         try {
@@ -282,6 +314,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             recorder.start(maxSeconds)
             recordedSurahId = chapter?.id
             recordedBookRevision = bookRevision
+            recordedBookId = book?.id
             recordedFile = null; seconds = 0; recording = true
             val started = SystemClock.elapsedRealtime()
             ticker = viewModelScope.launch {
@@ -299,7 +332,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun discardRecording() {
         stopPlayback(); ticker?.cancel(); recording = false; recorder.discard()
-        recordedFile = null; recordedSurahId = null; recordedBookRevision = null; seconds = 0
+        recordedFile = null; recordedSurahId = null; recordedBookRevision = null; recordedBookId = null; seconds = 0
     }
     fun foregrounded() {
         val wasActive = foreground
@@ -362,7 +395,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val file = recordedFile ?: return@action
         val bookRevision = recordedBookRevision
         val result = try {
-            api.json.decodeFromString<UploadedRecitation>(api.upload(file, recordedSurahId, bookRevision)).recitation
+            api.json.decodeFromString<UploadedRecitation>(api.upload(file, recordedSurahId, bookRevision, recordedBookId)).recitation
         } catch (error: ApiError) {
             if (bookRevision != null && error.status == 409) {
                 discardRecording()

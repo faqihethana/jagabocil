@@ -4,14 +4,18 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class Auth(val token: String, val role: String, val name: String)
 @Serializable data class Surah(val id: String, val name: String, val verses: Int, val arabic: String)
-@Serializable data class BookReading(val title: String, val text: String)
+@Serializable internal data class Story(
+    val id: String, val title: String, val text: String,
+    val theme: String = "", val templateId: String? = null,
+)
+@Serializable internal data class GeneratedStories(val books: List<Story>)
+@Serializable internal data class GeneratedStory(val book: Story)
 @Serializable data class Child(
     val id: String, val name: String, val mode: String, val surahId: String,
     val minSeconds: Int, val unlockMinutes: Int, val tvBrand: String, val aiConsent: Boolean,
     val tvTransport: String = "infrared", val tvMac: String = "",
     val tvPlatform: String = "wol", val tvHost: String = "",
     val username: String? = null, val tvRevision: Int? = null,
-    val bookReading: BookReading? = null,
 ) {
     val awaitsTv get() = tvTransport == "infrared" && tvBrand == "none"
 }
@@ -38,6 +42,7 @@ internal fun Recitation.readingTitle(quran: QuranLibrary) =
     val recoveryConfigured: Boolean = false, val juz30Tasks: Boolean = false,
     val billing: Billing? = null,
     val readingActivities: Boolean = false,
+    val bookLibrary: Boolean = false, val storyGeneration: Boolean = false,
 )
 @Serializable data class UploadedRecitation(val recitation: Recitation)
 @Serializable data class Billing(val amount: Int, val days: Int, val expiresAt: Long?, val pending: Boolean)
@@ -58,7 +63,7 @@ internal fun Recitation.readingTitle(quran: QuranLibrary) =
     val tvBrand: String, val aiConsent: Boolean,
     val tvTransport: String = "infrared", val tvMac: String = "",
     val tvPlatform: String = "wol", val tvHost: String = "",
-    val transcriptConsent: Boolean = false, val bookReading: BookReading? = null,
+    val transcriptConsent: Boolean = false,
 )
 @Serializable data class Permit(val authorized: Boolean, val tvBrand: String, val expiresAt: Long,
     val tvTransport: String = "infrared", val tvMac: String = "",

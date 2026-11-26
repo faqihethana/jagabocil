@@ -77,7 +77,7 @@ class MainActivity : ComponentActivity() {
     val owner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val recordingInProgress = vm.recording || vm.recordedFile != null
-    androidx.activity.compose.BackHandler(enabled = vm.screen == "quran" || vm.dashboard != null && (vm.screen != "home" || recordingInProgress)) {
+    androidx.activity.compose.BackHandler(enabled = vm.screen in listOf("quran", "books") || vm.dashboard != null && (vm.screen != "home" || recordingInProgress)) {
         when {
             vm.screen == "tv-setup" -> if (!vm.busy) vm.leaveTvSetup()
             vm.screen.startsWith("settings:") -> vm.screen = "family"
@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
     }
     Scaffold(containerColor = Cream, snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            if (vm.dashboard != null && vm.screen in listOf("home", "history", "family", "quran") && !recordingInProgress) {
+            if (vm.dashboard != null && vm.screen in listOf("home", "history", "family", "quran", "books") && !recordingInProgress) {
                 val parent = vm.dashboard?.role == "parent"
                 Column {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
                         NavigationBarItem(selected = vm.screen == "home", onClick = { vm.screen = "home" }, icon = { Icon(Icons.Outlined.Home, null) }, label = { Text("Beranda") }, colors = colors)
                         NavigationBarItem(selected = vm.screen == "history", onClick = { vm.screen = "history" }, icon = { Icon(Icons.Outlined.History, null) }, label = { Text("Riwayat") }, colors = colors)
                         NavigationBarItem(selected = vm.screen == "quran", onClick = { vm.screen = "quran" }, icon = { Icon(Icons.AutoMirrored.Outlined.MenuBook, null) }, label = { Text("Al-Qur’an", softWrap = false) }, colors = colors)
+                        NavigationBarItem(selected = vm.screen == "books", onClick = { vm.screen = "books" }, icon = { Icon(Icons.Outlined.Book, null) }, label = { Text("Buku") }, colors = colors)
                         NavigationBarItem(selected = vm.screen == "family", onClick = { vm.screen = "family" }, icon = { Icon(if (parent) Icons.Outlined.People else Icons.Outlined.Info, null) }, label = { Text(if (parent) "Keluarga" else "Panduan") }, colors = colors)
                     }
                 }
@@ -134,6 +135,7 @@ class MainActivity : ComponentActivity() {
             val data = vm.dashboard
             when {
                 vm.screen == "quran" -> QuranScreen(vm.quran, vm.api) { vm.screen = "home" }
+                vm.screen == "books" -> BookLibraryScreen(vm) { vm.screen = "home" }
                 data == null && !vm.loggedIn -> Welcome(vm)
                 data == null -> Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Menyambungkan keluarga…", style = MaterialTheme.typography.titleLarge)
@@ -141,6 +143,7 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = vm::refresh, enabled = !vm.busy) { Text("Coba lagi") }
                     TextButton(onClick = vm::logout, enabled = !vm.busy) { Text("Kembali ke halaman masuk") }
                     TextButton(onClick = { vm.screen = "quran" }) { Text("Baca Al-Qur’an") }
+                    TextButton(onClick = { vm.screen = "books" }) { Text("Buka rak buku") }
                 }
                 vm.screen == "tv-setup" && data.role == "child" -> TvSetupScreen(vm, data)
                 vm.screen.startsWith("review:") && data.role == "parent" -> ReviewScreen(vm, data)
@@ -212,16 +215,12 @@ class MainActivity : ComponentActivity() {
                     IconButton(onClick = ::back, enabled = !vm.busy) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
                 }
                 Brand()
-                if (role == null) {
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(
-                        onClick = { vm.screen = "quran" },
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        contentPadding = PaddingValues(horizontal = 13.dp, vertical = 8.dp),
-                    ) { Text("Baca Al-Qur’an") }
-                }
             }
             if (role == null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.screen = "quran" }, modifier = Modifier.weight(1f)) { Text("Baca Al-Qur’an") }
+                    OutlinedButton(onClick = { vm.screen = "books" }, modifier = Modifier.weight(1f)) { Text("Buka rak buku") }
+                }
                 Surface(color = Peach, modifier = Modifier.fillMaxWidth().padding(top = extraSpace * 0.12f),
                     shape = RoundedCornerShape(30.dp)) {
                     FamilyIllustration(Modifier.fillMaxWidth().height(228.dp + extraSpace * 0.24f).padding(8.dp))
@@ -464,8 +463,6 @@ class MainActivity : ComponentActivity() {
     var host by remember(child.id) { mutableStateOf(child.tvHost) }
     var mac by remember(child.id) { mutableStateOf(child.tvMac) }
     var consent by remember(child.id) { mutableStateOf(child.aiConsent) }
-    var bookTitle by rememberSaveable(child.id) { mutableStateOf(child.bookReading?.title.orEmpty()) }
-    var bookText by rememberSaveable(child.id) { mutableStateOf(child.bookReading?.text.orEmpty()) }
     var revoke by remember { mutableStateOf(false) }
     var showDiscovery by remember(child.id) { mutableStateOf(false) }
     var showSurahs by remember(child.id) { mutableStateOf(false) }
@@ -499,20 +496,6 @@ class MainActivity : ComponentActivity() {
         }
         TaskLink("Surah awal", vm.quran.chapter(surah)?.let { "${it.name} · Anak bisa pilih surah lain" }.orEmpty(),
             Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = taskSurahs.isNotEmpty()) { showSurahs = true }
-        if (data.readingActivities) {
-            Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionTitle("Bacaan buku")
-                    Text("Opsional. Isi judul dan kutipan agar anak bisa memilih Baca buku.", color = Muted)
-                    Field("Judul buku", bookTitle, { bookTitle = it.take(80) })
-                    OutlinedTextField(
-                        value = bookText, onValueChange = { bookText = it.take(1600) },
-                        label = { Text("Teks kutipan") }, supportingText = { Text("Minimal 8 kata · ${bookText.length}/1600 karakter") },
-                        minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
-                    )
-                }
-            }
-        }
         Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SectionTitle("Durasi bacaan dan izin")
@@ -556,14 +539,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         val validConnection = transport != "wifi" || (if (platform == "wol") runCatching { WakePacket.macBytes(mac) }.isSuccess else runCatching { LanAddress.parse(host) }.isSuccess && (mac.isBlank() || runCatching { WakePacket.macBytes(mac) }.isSuccess))
-        val validBook = bookTitle.isBlank() && bookText.isBlank() || bookTitle.isNotBlank() && bookText.isNotBlank()
         Button(
             onClick = {
                 vm.policy(child, Policy(mode, surah, seconds.roundToInt(), minutes.roundToInt(), brand, consent,
-                    transport, mac, platform, host, transcriptConsent = mode == "ai" && consent,
-                    bookReading = if (data.readingActivities) BookReading(bookTitle.trim(), bookText.trim()) else null))
+                    transport, mac, platform, host, transcriptConsent = mode == "ai" && consent))
             },
-            enabled = !vm.busy && validConnection && validBook && (mode != "ai" || consent && data.aiAvailable),
+            enabled = !vm.busy && validConnection && (mode != "ai" || consent && data.aiAvailable),
             modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
         ) { Text("Simpan aturan") }
         Text("Menyimpan aturan membatalkan izin lama agar tugas baru tidak terlewati.", color = Muted, fontSize = 12.sp)

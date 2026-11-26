@@ -25,8 +25,8 @@ import kotlinx.coroutines.delay
 
 @Composable internal fun ChildHome(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
-    val book = child.bookReading
-    val readingBook = data.readingActivities && vm.readingBook
+    val book = vm.selectedBook
+    val readingBook = data.bookLibrary && vm.readingBook
     val surah = vm.quran.chapter(vm.selectedSurahId ?: child.surahId)
     val ayahs = surah?.ayahs
     if (surah == null || ayahs == null) {
@@ -75,16 +75,16 @@ import kotlinx.coroutines.delay
                         ReadingStep.Preview -> ReadingBanner(null, "Periksa rekamanmu", "$readingTitle · ${vm.seconds} detik", Rose, Icons.Outlined.Headphones)
                         ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Bacaan untuk izin TV", readingTitle,
                             when {
-                                !canRecord -> "Minta orang tua menyiapkan judul dan kutipan buku."
-                                readingBook -> "Baca kutipan dan rekam minimal ${child.minSeconds} detik."
+                                !canRecord -> "Pilih cerita yang ingin kamu baca."
+                                readingBook -> "Baca cerita dan rekam minimal ${child.minSeconds} detik."
                                 else -> "${surah.verses} ayat · Rekam minimal ${child.minSeconds} detik"
                             }, Sky)
                     }
                 }
-                if (step == ReadingStep.Read && data.readingActivities) item {
+                if (step == ReadingStep.Read && data.bookLibrary) item {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         FilterChip(selected = !readingBook, onClick = { vm.selectReading(false) }, label = { Text("Ngaji") })
-                        FilterChip(selected = readingBook, onClick = { vm.selectReading(true) }, label = { Text("Baca buku") })
+                        FilterChip(selected = readingBook, onClick = { if (!vm.busy) vm.screen = "books" }, label = { Text("Baca buku") })
                     }
                 }
                 if (step == ReadingStep.Read && !readingBook) item {
@@ -96,11 +96,7 @@ import kotlinx.coroutines.delay
                 }
                 if (step.showsVerses) {
                     if (readingBook) {
-                        if (book != null) item {
-                            Surface(color = MaterialTheme.colorScheme.surfaceContainerLowest, shape = RoundedCornerShape(20.dp)) {
-                                Text(book.text, Modifier.fillMaxWidth().padding(20.dp), style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
+                        if (book != null) item { StoryBody(book.text) }
                     } else {
                         quranVerses(surah.id, ayahs)
                         item { QuranAttribution() }

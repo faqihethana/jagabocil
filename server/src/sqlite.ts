@@ -15,6 +15,10 @@ export function sqliteDatabase(path: string): Database {
       expires_at INTEGER, used_at INTEGER, feedback TEXT NOT NULL, reviewer TEXT);
     CREATE TABLE IF NOT EXISTS billing_orders(id TEXT PRIMARY KEY,parent_id TEXT NOT NULL REFERENCES parents(id),
       amount INTEGER NOT NULL,created_at INTEGER NOT NULL,status TEXT NOT NULL,checkout_url TEXT,paid_at INTEGER);
+    CREATE TABLE IF NOT EXISTS generated_books(
+      id TEXT PRIMARY KEY, child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+      template_id TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL, UNIQUE(child_id,template_id)
+    );
     CREATE UNIQUE INDEX IF NOT EXISTS billing_order_open ON billing_orders(parent_id) WHERE status='open';
     CREATE INDEX IF NOT EXISTS billing_order_paid ON billing_orders(parent_id,paid_at) WHERE status='paid';
     CREATE INDEX IF NOT EXISTS children_parent ON children(parent_id);

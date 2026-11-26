@@ -33,7 +33,7 @@ import kotlinx.coroutines.CancellationException
     TextButton(onClick = { expanded = !expanded }) {
         Text(when {
             expanded -> "Tutup rincian bacaan"
-            book -> "Lihat kutipan dan transkripsi"
+            book -> "Lihat cerita dan transkripsi"
             else -> "Lihat transkripsi dan surah"
         })
     }
@@ -65,7 +65,7 @@ import kotlinx.coroutines.CancellationException
                         Text("Kemiripan $score% · Ambang ${details.matchThreshold}%", style = MaterialTheme.typography.titleMedium)
                     }
                     if (reference != null) {
-                        Text(if (book) "Kutipan buku" else "Teks surah", style = MaterialTheme.typography.titleSmall)
+                        Text(if (book) "Teks cerita" else "Teks surah", style = MaterialTheme.typography.titleSmall)
                         Text(reference, style = MaterialTheme.typography.bodyLarge.copy(textDirection = TextDirection.Content))
                     }
                     Text("Transkripsi AI", style = MaterialTheme.typography.titleSmall)

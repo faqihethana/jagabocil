@@ -1,6 +1,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
+import { storyPrompt, storySchema, storySystem, type WriteStory } from './book-library.js';
 
 export const transcriptionSchema = z.object({ text: z.string() });
 export type Transcribe = (audio: Buffer, mediaType: string, duration: number) => Promise<string>;
@@ -20,5 +21,21 @@ export function createGeminiTranscriber(key: string, model: string, fetch?: type
       ] }],
     });
     return transcriptionSchema.parse(output).text;
+  };
+}
+
+export function createGeminiStoryWriter(key: string, model: string): WriteStory {
+  const google = createGoogleGenerativeAI({ apiKey: key });
+  return async book => {
+    const { output } = await generateText({
+      model: google.interactions(model),
+      providerOptions: { google: { store: false } },
+      system: storySystem,
+      prompt: storyPrompt(book),
+      output: Output.object({ schema: storySchema }),
+      maxOutputTokens: 1200,
+      abortSignal: AbortSignal.timeout(25_000), maxRetries: 0,
+    });
+    return storySchema.parse(output);
   };
 }

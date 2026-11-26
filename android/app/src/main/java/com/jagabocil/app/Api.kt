@@ -56,6 +56,10 @@ class Api(var token: String = "") {
     internal suspend fun quranText(id: String) = json.decodeFromString<QuranText>(
         request("/quran/surahs/$id", authenticated = false),
     )
+    internal suspend fun generatedStories() =
+        json.decodeFromString<GeneratedStories>(request("/books/generated")).books
+    internal suspend fun writeStory(templateId: String) =
+        json.decodeFromString<GeneratedStory>(request("/books/generated", "POST", body("templateId" to templateId))).book
     suspend fun audio(id: String, file: File) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url("$SERVER_URL/recitations/$id/audio").header("Authorization", "Bearer $token").build()
         http.newCall(request).execute().use {
@@ -63,11 +67,12 @@ class Api(var token: String = "") {
             it.body?.byteStream()?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
         }
     }
-    suspend fun upload(file: File, surahId: String?, bookRevision: Int?): String {
+    suspend fun upload(file: File, surahId: String?, bookRevision: Int?, bookId: String?): String {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
         if (surahId != null) body.addFormDataPart("surahId", surahId)
         body.addFormDataPart("audio", "bacaan.m4a", file.asRequestBody("audio/mp4".toMediaType()))
-        val path = if (bookRevision != null) "/recitations?kind=book&revision=$bookRevision" else "/recitations?selection=self"
+        val path = if (bookRevision != null) "/recitations?kind=book&revision=$bookRevision&bookId=$bookId"
+            else "/recitations?selection=self"
         return request(path, "POST", body.build())
     }
 }

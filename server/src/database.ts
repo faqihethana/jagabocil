@@ -17,7 +17,7 @@ export function schemaName(value = 'jagabocil') {
 }
 export function postgresSql(sql: string, schema: string) {
   // Only application-owned, static statements use this adapter. Never interpolate user SQL.
-  const qualified = sql.replace(/\b(parents|children|tokens|recitations|billing_orders)\b/g, name => `${schemaName(schema)}."${name}"`);
+  const qualified = sql.replace(/\b(parents|children|tokens|recitations|billing_orders|generated_books)\b/g, name => `${schemaName(schema)}."${name}"`);
   let index = 0, quoted = false, output = '';
   for (let i = 0; i < qualified.length; i++) {
     const ch = qualified[i]!;
@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 6;
+const schemaVersion = 7;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -101,6 +101,15 @@ export const migration = (schema: string) => {
       ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS reference_text TEXT;
       ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS transcript TEXT;
       ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS match_score INTEGER;
+      INSERT INTO ${s}.schema_migrations(version) VALUES(6) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      CREATE TABLE IF NOT EXISTS ${s}.generated_books(
+        id TEXT PRIMARY KEY, child_id TEXT NOT NULL REFERENCES ${s}.children(id) ON DELETE CASCADE,
+        template_id TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL, UNIQUE(child_id,template_id)
+      );
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

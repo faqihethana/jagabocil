@@ -8,14 +8,27 @@ import { postgresDatabase } from '../src/database.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Transcribe } from '../src/ai.js';
 import { isTaskSurah, quranText } from '../src/catalog.js';
+import { bookTemplates, storySchema } from '../src/book-library.js';
 
 import { wav, multipart } from './fixtures.js';
 const root = await mkdtemp(join(tmpdir(), 'jagabocil-test-'));
 let now = Date.now();
 let transcribe: Transcribe = async () => { throw Error('provider unavailable'); };
+let storyCalls = 0;
+const generatedStory = {
+  title: 'Piring Kecil di Bawah Pohon',
+  text: 'Di halaman rumah, Jati melihat seekor kucing duduk di bawah pohon. Ia membawa piring kecil berisi air dan meletakkannya di dekat pagar. Lalu ia duduk di bangku dan menunggu.\n\nKucing itu mendekat, minum, dan beristirahat di tempat yang teduh. Jati kembali ke rumah saat hari mulai sore.',
+};
 const schema = 'jagabocil_test_' + randomUUID().replaceAll('-', '');
 const database = process.env.TEST_DATABASE_URL ? await postgresDatabase(process.env.TEST_DATABASE_URL, schema, true) : undefined;
-const app = await createApp({ dataDir: root, database, now: () => now, transcribe: (...args) => transcribe(...args) });
+const app = await createApp({
+  dataDir: root, database, now: () => now, transcribe: (...args) => transcribe(...args),
+  writeStory: async template => {
+    storyCalls++;
+    if (template.id !== 'kucing-di-teras') throw Error('provider unavailable');
+    return generatedStory;
+  },
+});
 const request = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, token = '', payload?: unknown) => app.inject({ method, url, headers: token ? { authorization: `Bearer ${token}` } : {}, payload });
 let parent: string, outsider: string, child: string, childId: string, recId: string;
 const policy = { mode: 'manual', surahId: '112', minSeconds: 10, unlockMinutes: 15, tvBrand: 'lg', aiConsent: false };
@@ -529,4 +542,66 @@ test('book review tolerates word errors, preserves its excerpt, and requires a p
   assert.equal((await configure({ title: '', text: '' })).statusCode, 200);
   assert.equal((await submit(revision)).statusCode, 409);
   assert.equal((await request('GET', detailsPath, parent)).json().referenceText, bookReading.text);
+});
+
+test('children can record catalog books and private AI variants without a parent-supplied excerpt', async () => {
+  assert.equal(bookTemplates.size, 24);
+  for (const template of bookTemplates.values()) assert.ok(storySchema.safeParse(template).success, template.title);
+  const createReader = async (username: string) => {
+    const credentials = { username, password: 'bacabuku' };
+    const created = await request('POST', '/children/accounts', parent, { ...credentials, name: username });
+    assert.equal(created.statusCode, 201);
+    const profile = created.json().child;
+    const login = await request('POST', '/auth/child/login', '', credentials);
+    assert.equal(login.statusCode, 200);
+    return { id: profile.id, revision: profile.tvRevision, token: login.json().token as string };
+  };
+  const reader = await createReader('PembacaUji');
+  const otherReader = await createReader('PembacaLain');
+  const configured = await request('PUT', `/children/${reader.id}/policy`, parent, aiPolicy);
+  assert.equal(configured.statusCode, 200);
+  reader.revision = configured.json().child.tvRevision;
+  const data = (await request('GET', '/dashboard?reading=extended', reader.token)).json();
+  assert.equal(data.bookLibrary, true);
+  assert.equal(data.storyGeneration, true);
+  assert.equal(data.children[0].bookReading, undefined);
+
+  const template = bookTemplates.get('kucing-di-teras')!;
+  const generate = (token: string, templateId = template.id) => request('POST', '/books/generated', token, { templateId });
+  assert.equal((await generate('')).statusCode, 401);
+  assert.equal((await generate(parent)).statusCode, 403);
+  assert.equal((await generate(reader.token, 'random-prompt')).statusCode, 404);
+  assert.equal(storyCalls, 0);
+  const generated = await generate(reader.token);
+  assert.equal(generated.statusCode, 200);
+  const story = generated.json().book;
+  assert.equal(story.templateId, template.id);
+  assert.equal(story.text, generatedStory.text);
+  assert.equal((await generate(reader.token)).json().book.id, story.id);
+  assert.equal(storyCalls, 1);
+  assert.deepEqual((await request('GET', '/books/generated', reader.token)).json().books, [story]);
+  assert.deepEqual((await request('GET', '/books/generated', otherReader.token)).json().books, []);
+  assert.equal((await generate(reader.token, 'jejak-kelinci')).statusCode, 502);
+  assert.deepEqual((await request('GET', '/books/generated', reader.token)).json().books, [story]);
+
+  const submit = (account: typeof reader, bookId: string) => {
+    const form = new FormData();
+    form.set('audio', new Blob([new Uint8Array(wav(16))], { type: 'audio/wav' }), 'buku.wav');
+    return app.inject({
+      method: 'POST', url: `/recitations?kind=book&revision=${account.revision}&bookId=${bookId}`,
+      remoteAddress: '127.0.0.4', headers: { authorization: `Bearer ${account.token}` }, payload: form,
+    });
+  };
+  assert.equal((await submit(otherReader, story.id)).statusCode, 404);
+  for (const book of [template, story]) {
+    transcribe = async () => book.text;
+    const uploaded = await submit(reader, book.id);
+    assert.equal(uploaded.statusCode, 201);
+    const rec = uploaded.json().recitation;
+    assert.equal(rec.bookTitle, book.title);
+    assert.equal(rec.status, 'pending');
+    const details = (await request('GET', `/recitations/${rec.id}/reading-details`, parent)).json();
+    assert.equal(details.referenceText, book.text);
+    assert.equal(details.matchScore, 100);
+  }
 });

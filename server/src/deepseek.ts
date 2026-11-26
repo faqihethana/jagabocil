@@ -3,7 +3,9 @@ import { mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { z } from 'zod';
 import { transcriptionSchema, type Transcribe } from './ai.js';
+import { storyPrompt, storySchema, storySystem, type WriteStory } from './book-library.js';
 
 const run = promisify(execFile);
 export function createDeepSeekTranscriber(key: string, fetchAudio = globalThis.fetch): Transcribe {
@@ -40,5 +42,29 @@ export function createDeepSeekTranscriber(key: string, fetchAudio = globalThis.f
       throw Error(`DeepSeek ASR returned HTTP ${response.status}.`);
     }
     return transcriptionSchema.parse(await response.json()).text;
+  };
+}
+
+const completionSchema = z.object({
+  choices: z.array(z.object({ finish_reason: z.literal('stop'), message: z.object({ content: z.string() }) })).min(1),
+});
+export function createDeepSeekStoryWriter(key: string, fetchText = globalThis.fetch): WriteStory {
+  return async book => {
+    const response = await fetchText('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-flash', thinking: { type: 'disabled' },
+        max_tokens: 700, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: storySystem }, { role: 'user', content: storyPrompt(book) }],
+      }),
+      redirect: 'error', signal: AbortSignal.timeout(25_000),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw Error(`DeepSeek story generation returned HTTP ${response.status}.`);
+    }
+    const result = completionSchema.parse(await response.json());
+    return storySchema.parse(JSON.parse(result.choices[0]!.message.content));
   };
 }
