@@ -155,7 +155,7 @@ export async function createApp(options: Options) {
     await change('UPDATE children SET pair_hash=NULL,pair_expires=NULL WHERE pair_expires<=?', now());
   }
   await cleanup();
-  const cleanupTimer = setInterval(() => { void cleanup().catch(e => app.log.error(e)); }, 3_600_000);
+  const cleanupTimer = setInterval(() => { void cleanup().catch(e => app.log.error(e)); }, 60_000);
   cleanupTimer.unref();
   app.addHook('onClose', async () => { clearInterval(cleanupTimer); await db.close(); });
 
