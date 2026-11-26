@@ -43,15 +43,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var refreshJob: Job? = null
     private var lastLoadedAt = 0L
     private var recordedSurahId: String? = null
+    private var recordedBookRevision: Int? = null
     private var clockOffset = 0L
     var dashboard by mutableStateOf<Dashboard?>(null); private set
     var busy by mutableStateOf(false); private set
+    var checkingReadingResult by mutableStateOf(false); private set
     var message by mutableStateOf<String?>(null)
     var recording by mutableStateOf(false); private set
     var seconds by mutableIntStateOf(0); private set
     var recordedFile by mutableStateOf<File?>(null); private set
     var playing by mutableStateOf<String?>(null); private set
     var selectedSurahId by mutableStateOf<String?>(null); private set
+    var readingBook by mutableStateOf(false); private set
     var tvPaired by mutableStateOf(false); private set
     private var tvReturnScreen = "home"
     private var reviewFromNotification: String? = null
@@ -88,6 +91,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         dashboard = null
         recoveryCode = null
         selectedSurahId = null
+        readingBook = false
         tvPaired = false
         tvReturnScreen = "home"
         lastLoadedAt = 0L
@@ -114,6 +118,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (notificationsEnabled) withContext(Dispatchers.IO) { notifications.observe(result, token) }
     }
     fun refresh() { if (foreground && loggedIn) action { load() } }
+    fun checkReadingResult(recitationId: String) {
+        if (!foreground || !loggedIn || dashboard?.role != "child") return
+        action {
+            checkingReadingResult = true
+            try {
+                load()
+                val recitation = dashboard?.recitations?.firstOrNull { it.id == recitationId }
+                when (recitation?.status) {
+                    "pending" -> message = "Belum ada keputusan. Bacaanmu masih menunggu diperiksa orang tua."
+                    null -> message = "Rekaman ini sudah tidak tersedia."
+                    else -> Unit
+                }
+            } finally {
+                checkingReadingResult = false
+            }
+        }
+    }
     private fun refreshQuietly() {
         if (!foreground || !loggedIn || busy || recording || recordedFile != null || refreshJob?.isActive == true) return
         refreshJob = viewModelScope.launch {
@@ -245,15 +266,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun selectSurah(id: String) {
         if (!recording && recordedFile == null && quran.chapter(id)?.ayahs != null) selectedSurahId = id
     }
+    fun selectReading(book: Boolean) {
+        if (!recording && recordedFile == null && !busy) readingBook = book
+    }
     fun startRecording() {
         if (busy || recording) return
-        val id = selectedSurahId ?: dashboard?.children?.firstOrNull()?.surahId ?: return
-        val chapter = quran.chapter(id) ?: return
-        val maxSeconds = chapter.maxRecordingSeconds
+        val data = dashboard ?: return
+        val child = data.children.firstOrNull() ?: return
+        val useBook = data.readingActivities && readingBook
+        val bookRevision = if (useBook) child.tvRevision?.takeIf { child.bookReading != null } ?: return else null
+        val chapter = if (useBook) null else quran.chapter(selectedSurahId ?: child.surahId) ?: return
+        val maxSeconds = chapter?.maxRecordingSeconds ?: 180
         try {
             stopPlayback()
             recorder.start(maxSeconds)
-            recordedSurahId = chapter.id
+            recordedSurahId = chapter?.id
+            recordedBookRevision = bookRevision
             recordedFile = null; seconds = 0; recording = true
             val started = SystemClock.elapsedRealtime()
             ticker = viewModelScope.launch {
@@ -269,7 +297,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ticker?.cancel(); recording = false
         try { recordedFile = recorder.stop() } catch (_: Exception) { recordedFile = null; message = "Rekaman terlalu singkat atau terputus. Yuk, ulangi." }
     }
-    fun discardRecording() { stopPlayback(); ticker?.cancel(); recording = false; recorder.discard(); recordedFile = null; recordedSurahId = null; seconds = 0 }
+    fun discardRecording() {
+        stopPlayback(); ticker?.cancel(); recording = false; recorder.discard()
+        recordedFile = null; recordedSurahId = null; recordedBookRevision = null; seconds = 0
+    }
     fun foregrounded() {
         val wasActive = foreground
         foreground = true
@@ -329,12 +360,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun upload() = action {
         val file = recordedFile ?: return@action
-        val surahId = recordedSurahId ?: return@action
-        val result = api.json.decodeFromString<UploadedRecitation>(api.upload(file, surahId)).recitation
+        val bookRevision = recordedBookRevision
+        val result = try {
+            api.json.decodeFromString<UploadedRecitation>(api.upload(file, recordedSurahId, bookRevision)).recitation
+        } catch (error: ApiError) {
+            if (bookRevision != null && error.status == 409) {
+                discardRecording()
+                load()
+            }
+            throw error
+        }
         discardRecording()
         dashboard = dashboard?.let { it.copy(recitations = listOf(result) + it.recitations.filter { rec -> rec.id != result.id }) }
         screen = "home"
-        message = "Rekaman terkirim. Terima kasih sudah mengaji!"
+        message = "Rekaman bacaan terkirim."
     }
     fun play(rec: Recitation) = action {
         if (playing == rec.id) { stopPlayback(); return@action }

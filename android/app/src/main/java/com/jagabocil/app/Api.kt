@@ -50,7 +50,9 @@ class Api(var token: String = "") {
             text
         }
     }
-    suspend fun dashboard() = json.decodeFromString<Dashboard>(request("/dashboard?quran=local"))
+    suspend fun dashboard() = json.decodeFromString<Dashboard>(request("/dashboard?quran=local&reading=extended"))
+    internal suspend fun readingDetails(id: String) =
+        json.decodeFromString<ReadingDetails>(request("/recitations/$id/reading-details"))
     internal suspend fun quranText(id: String) = json.decodeFromString<QuranText>(
         request("/quran/surahs/$id", authenticated = false),
     )
@@ -61,9 +63,13 @@ class Api(var token: String = "") {
             it.body?.byteStream()?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
         }
     }
-    suspend fun upload(file: File, surahId: String) = request("/recitations?selection=self", "POST", MultipartBody.Builder().setType(MultipartBody.FORM)
-        .addFormDataPart("surahId", surahId)
-        .addFormDataPart("audio", "ngaji.m4a", file.asRequestBody("audio/mp4".toMediaType())).build())
+    suspend fun upload(file: File, surahId: String?, bookRevision: Int?): String {
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+        if (surahId != null) body.addFormDataPart("surahId", surahId)
+        body.addFormDataPart("audio", "bacaan.m4a", file.asRequestBody("audio/mp4".toMediaType()))
+        val path = if (bookRevision != null) "/recitations?kind=book&revision=$bookRevision" else "/recitations?selection=self"
+        return request(path, "POST", body.build())
+    }
 }
 
 // The bearer token is encrypted with a device-bound, non-exportable Android Keystore key.

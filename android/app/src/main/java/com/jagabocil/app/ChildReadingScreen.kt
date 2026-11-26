@@ -25,6 +25,8 @@ import kotlinx.coroutines.delay
 
 @Composable internal fun ChildHome(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
+    val book = child.bookReading
+    val readingBook = data.readingActivities && vm.readingBook
     val surah = vm.quran.chapter(vm.selectedSurahId ?: child.surahId)
     val ayahs = surah?.ayahs
     if (surah == null || ayahs == null) {
@@ -48,6 +50,8 @@ import kotlinx.coroutines.delay
     }
     val step = readingStep(vm.recording, vm.recordedFile != null, data.recitations, maxOf(expiryClock, vm.serverNow()))
     val last = data.recitations.firstOrNull()
+    val readingTitle = if (readingBook) book?.title ?: "Baca buku" else surah.name
+    val canRecord = !readingBook || book != null
     val tvReady = when {
         child.awaitsTv -> false
         child.tvTransport == "infrared" -> vm.infrared.available
@@ -66,25 +70,45 @@ import kotlinx.coroutines.delay
                     if (!vm.recording) SectionTitle("Halo, ${child.name}")
                     Spacer(Modifier.height(10.dp))
                     when (step) {
-                        is ReadingStep.Approved -> ReadingBanner("Izin TV siap", "Bacaan disetujui", vm.quran.name(step.recitation.surahId), Mint, Icons.Outlined.Tv)
-                        is ReadingStep.Waiting -> ReadingBanner(null, "Menunggu diperiksa", vm.quran.name(step.recitation.surahId), Butter, Icons.Outlined.Headphones)
-                        ReadingStep.Preview -> ReadingBanner(null, "Periksa rekamanmu", "${surah.name} · ${vm.seconds} detik", Rose, Icons.Outlined.Headphones)
-                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Bacaan untuk izin TV", surah.name,
-                            "${surah.verses} ayat · Rekam minimal ${child.minSeconds} detik", Sky)
+                        is ReadingStep.Approved -> ReadingBanner("Izin TV siap", "Bacaan disetujui", step.recitation.readingTitle(vm.quran), Mint, Icons.Outlined.Tv)
+                        is ReadingStep.Waiting -> ReadingBanner(null, "Menunggu diperiksa", step.recitation.readingTitle(vm.quran), Butter, Icons.Outlined.Headphones)
+                        ReadingStep.Preview -> ReadingBanner(null, "Periksa rekamanmu", "$readingTitle · ${vm.seconds} detik", Rose, Icons.Outlined.Headphones)
+                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Bacaan untuk izin TV", readingTitle,
+                            when {
+                                !canRecord -> "Minta orang tua menyiapkan judul dan kutipan buku."
+                                readingBook -> "Baca kutipan dan rekam minimal ${child.minSeconds} detik."
+                                else -> "${surah.verses} ayat · Rekam minimal ${child.minSeconds} detik"
+                            }, Sky)
                     }
                 }
-                if (step == ReadingStep.Read) item {
+                if (step == ReadingStep.Read && data.readingActivities) item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FilterChip(selected = !readingBook, onClick = { vm.selectReading(false) }, label = { Text("Ngaji") })
+                        FilterChip(selected = readingBook, onClick = { vm.selectReading(true) }, label = { Text("Baca buku") })
+                    }
+                }
+                if (step == ReadingStep.Read && !readingBook) item {
                     TaskLink("Pilih surah", "Pilih bacaan dari Juz 30.", Icons.AutoMirrored.Outlined.MenuBook,
                         Sky, enabled = !vm.busy) { showSurahs = true }
                 }
-                if (!step.showsVerses || inlineControls) item { ReadingControls(vm, step, child, last, tvReady, ::start) }
+                if (!step.showsVerses || inlineControls) {
+                    item { ReadingControls(vm, step, child, last, tvReady, canRecord, ::start) }
+                }
                 if (step.showsVerses) {
-                    quranVerses(surah.id, ayahs)
-                    item { QuranAttribution() }
+                    if (readingBook) {
+                        if (book != null) item {
+                            Surface(color = MaterialTheme.colorScheme.surfaceContainerLowest, shape = RoundedCornerShape(20.dp)) {
+                                Text(book.text, Modifier.fillMaxWidth().padding(20.dp), style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    } else {
+                        quranVerses(surah.id, ayahs)
+                        item { QuranAttribution() }
+                    }
                 }
             }
             if (step.showsVerses && !inlineControls) {
-                ReadingControls(vm, step, child, last, tvReady, ::start)
+                ReadingControls(vm, step, child, last, tvReady, canRecord, ::start)
                 Spacer(Modifier.height(4.dp))
             }
         }
@@ -97,7 +121,7 @@ import kotlinx.coroutines.delay
 
 @Composable private fun ReadingControls(
     vm: AppViewModel, step: ReadingStep, child: Child, last: Recitation?,
-    tvReady: Boolean, onRecord: () -> Unit,
+    tvReady: Boolean, canRecord: Boolean, onRecord: () -> Unit,
 ) {
     val color = when (step) {
         ReadingStep.Recording -> Rose
@@ -112,7 +136,7 @@ import kotlinx.coroutines.delay
                 ReadingStep.Recording -> {
                     Text("Sedang merekam · %02d:%02d".format(vm.seconds / 60, vm.seconds % 60), style = MaterialTheme.typography.titleMedium)
                     val remaining = (child.minSeconds - vm.seconds).coerceAtLeast(0)
-                    Text(if (remaining > 0) "Baca setidaknya $remaining detik lagi." else "Selesaikan rekaman setelah ayat terakhir.", color = Muted)
+                    Text(if (remaining > 0) "Baca setidaknya $remaining detik lagi." else "Tekan selesai setelah kamu selesai membaca.", color = Muted)
                     Button(onClick = vm::finishRecording, enabled = !vm.busy && remaining == 0, modifier = Modifier.fillMaxWidth()) { Text("Selesai merekam") }
                     TextButton(onClick = vm::discardRecording, enabled = !vm.busy) { Text("Batalkan rekaman") }
                 }
@@ -138,11 +162,28 @@ import kotlinx.coroutines.delay
                 }
                 is ReadingStep.Waiting -> {
                     Text(if (child.mode == "ai") "Hasil pemeriksaan akan muncul di sini." else "Ayah atau Ibu akan mendengarkan bacaanmu.", color = Muted)
-                    OutlinedButton(onClick = vm::refresh, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Cek hasil") }
+                    OutlinedButton(
+                        onClick = { vm.checkReadingResult(step.recitation.id) },
+                        enabled = !vm.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (vm.checkingReadingResult) {
+                            CircularProgressIndicator(
+                                Modifier.size(16.dp),
+                                color = Forest,
+                                strokeWidth = 2.dp,
+                                trackColor = Forest.copy(alpha = 0.16f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Mengecek hasil…", color = Forest)
+                        } else {
+                            Text("Cek hasil")
+                        }
+                    }
                 }
                 ReadingStep.Read -> {
                     if (last?.status == "rejected") Text(last.feedback.ifBlank { "Ayah atau Ibu meminta kamu mengulang bacaan." })
-                    Button(onClick = onRecord, enabled = !vm.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Button(onClick = onRecord, enabled = !vm.busy && canRecord, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                         Icon(Icons.Outlined.Mic, null)
                         Spacer(Modifier.width(8.dp))
                         Text(if (last?.status == "rejected") "Rekam ulang" else "Mulai rekam")

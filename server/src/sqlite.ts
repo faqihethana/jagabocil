@@ -32,6 +32,11 @@ export function sqliteDatabase(path: string): Database {
     const recordingColumns = new Set(db.prepare('PRAGMA table_info(recitations)').all().map(column => column.name));
     if (!recordingColumns.has('ready_at')) db.exec('ALTER TABLE recitations ADD COLUMN ready_at INTEGER');
     if (!recordingColumns.has('reviewed_at')) db.exec('ALTER TABLE recitations ADD COLUMN reviewed_at INTEGER');
+    if (!recordingColumns.has('reading_kind')) db.exec("ALTER TABLE recitations ADD COLUMN reading_kind TEXT NOT NULL DEFAULT 'quran'");
+    if (!recordingColumns.has('book_title')) db.exec('ALTER TABLE recitations ADD COLUMN book_title TEXT');
+    if (!recordingColumns.has('reference_text')) db.exec('ALTER TABLE recitations ADD COLUMN reference_text TEXT');
+    if (!recordingColumns.has('transcript')) db.exec('ALTER TABLE recitations ADD COLUMN transcript TEXT');
+    if (!recordingColumns.has('match_score')) db.exec('ALTER TABLE recitations ADD COLUMN match_score INTEGER');
     const columns = new Set(db.prepare('PRAGMA table_info(children)').all().map(column => column.name));
     if (!columns.has('tv_transport')) db.exec("ALTER TABLE children ADD COLUMN tv_transport TEXT NOT NULL DEFAULT 'infrared'");
     if (!columns.has('tv_mac')) db.exec("ALTER TABLE children ADD COLUMN tv_mac TEXT NOT NULL DEFAULT ''");
@@ -40,6 +45,8 @@ export function sqliteDatabase(path: string): Database {
     if (!columns.has('username')) db.exec('ALTER TABLE children ADD COLUMN username TEXT');
     if (!columns.has('password')) db.exec('ALTER TABLE children ADD COLUMN password TEXT');
     if (!columns.has('account_revision')) db.exec('ALTER TABLE children ADD COLUMN account_revision INTEGER NOT NULL DEFAULT 0');
+    if (!columns.has('book_title')) db.exec("ALTER TABLE children ADD COLUMN book_title TEXT NOT NULL DEFAULT ''");
+    if (!columns.has('book_text')) db.exec("ALTER TABLE children ADD COLUMN book_text TEXT NOT NULL DEFAULT ''");
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS children_username ON children(username) WHERE username IS NOT NULL');
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }

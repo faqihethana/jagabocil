@@ -6,19 +6,20 @@ import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import { postgresDatabase } from '../src/database.js';
 import { createHash, randomUUID } from 'node:crypto';
-import type { Verify } from '../src/ai.js';
+import type { Transcribe } from '../src/ai.js';
 import { isTaskSurah, quranText } from '../src/catalog.js';
 
 import { wav, multipart } from './fixtures.js';
 const root = await mkdtemp(join(tmpdir(), 'jagabocil-test-'));
 let now = Date.now();
-let verifier: Verify = async () => { throw Error('provider unavailable'); };
+let transcribe: Transcribe = async () => { throw Error('provider unavailable'); };
 const schema = 'jagabocil_test_' + randomUUID().replaceAll('-', '');
 const database = process.env.TEST_DATABASE_URL ? await postgresDatabase(process.env.TEST_DATABASE_URL, schema, true) : undefined;
-const app = await createApp({ dataDir: root, database, now: () => now, verify: (...args) => verifier(...args) });
+const app = await createApp({ dataDir: root, database, now: () => now, transcribe: (...args) => transcribe(...args) });
 const request = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, token = '', payload?: unknown) => app.inject({ method, url, headers: token ? { authorization: `Bearer ${token}` } : {}, payload });
 let parent: string, outsider: string, child: string, childId: string, recId: string;
 const policy = { mode: 'manual', surahId: '112', minSeconds: 10, unlockMinutes: 15, tvBrand: 'lg', aiConsent: false };
+const aiPolicy = { ...policy, mode: 'ai', aiConsent: true, transcriptConsent: true };
 async function upload(token = child, audio = wav(11), surah = '112') {
   const data = multipart(audio, surah);
   return app.inject({ method: 'POST', url: '/recitations', headers: { ...data.headers, authorization: `Bearer ${token}` }, payload: data.payload });
@@ -127,40 +128,54 @@ test('expired approvals cannot authorize power', async () => {
   assert.equal((await request('POST', '/tv/authorize', child, { recitationId: id })).statusCode, 403);
 });
 test('AI requires parent consent', async () => {
-  assert.equal((await request('PUT', `/children/${childId}/policy`, parent, { ...policy, mode: 'ai', aiConsent: false })).statusCode, 400);
-  assert.equal((await request('PUT', `/children/${childId}/policy`, child, { ...policy, mode: 'ai', aiConsent: true })).statusCode, 403);
+  assert.equal((await request('PUT', `/children/${childId}/policy`, parent, { ...aiPolicy, aiConsent: false })).statusCode, 400);
+  assert.equal((await request('PUT', `/children/${childId}/policy`, parent, { ...aiPolicy, transcriptConsent: undefined })).statusCode, 400);
+  assert.equal((await request('PUT', `/children/${childId}/policy`, child, aiPolicy)).statusCode, 403);
 });
 test('AI outage falls back to parent review without granting power', async () => {
-  await request('PUT', `/children/${childId}/policy`, parent, { ...policy, mode: 'ai', aiConsent: true });
+  assert.equal((await request('PUT', `/children/${childId}/policy`, parent, aiPolicy)).statusCode, 200);
   const rec = (await upload()).json().recitation;
   assert.equal(rec.status, 'pending'); assert.match(rec.feedback, /orang tua/);
+  assert.equal(rec.hasTranscript, false);
   assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 403);
   await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'reject' });
 });
-test('uncertain AI output stays pending; malformed output never grants permission', async () => {
-  verifier = async () => ({ isRecitation: true, matchesSurah: true, coverage: .99, confidence: .8, feedback: 'Perlu didengar ulang.' });
-  let rec = (await upload()).json().recitation; assert.equal(rec.status, 'pending');
-  await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'reject' });
-  verifier = async () => ({ isRecitation: true, matchesSurah: true, coverage: 2, confidence: 1, feedback: 'invalid' });
-  rec = (await upload()).json().recitation; assert.equal(rec.status, 'pending');
+test('a transcript without intelligible words stays pending for manual review', async () => {
+  transcribe = async () => '  …  ';
+  const rec = (await upload()).json().recitation;
+  assert.equal(rec.status, 'pending');
+  assert.equal(rec.hasTranscript, false);
   await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'reject' });
 });
-test('high-confidence complete recitation grants once, and policy changes revoke unused grants', async () => {
-  verifier = async () => ({ isRecitation: true, matchesSurah: true, coverage: .99, confidence: .99, feedback: 'Bacaan lengkap.' });
+test('Quran transcripts are for the parent to compare and require manual approval', async () => {
+  const transcript = 'قل هو الله أحد';
+  transcribe = async () => transcript;
   const rec = (await upload()).json().recitation;
-  assert.equal(rec.status, 'approved'); assert.equal(rec.reviewer, 'ai');
+  assert.equal(rec.status, 'pending');
+  assert.equal(rec.reviewer, null);
+  assert.equal(rec.hasTranscript, true);
+  assert.equal(rec.transcript, undefined);
+  const detailsUrl = `/recitations/${rec.id}/reading-details`;
+  const details = await request('GET', detailsUrl, parent);
+  assert.equal(details.statusCode, 200);
+  assert.equal(details.json().transcript, transcript);
+  assert.equal(details.json().matchScore, null);
+  assert.equal((await request('GET', detailsUrl, child)).statusCode, 403);
+  assert.equal((await request('GET', detailsUrl, outsider)).statusCode, 404);
+  assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 403);
+  assert.equal((await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'approve' })).statusCode, 200);
   await request('PUT', `/children/${childId}/policy`, parent, policy);
   assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 403);
 });
-test('AI cannot overwrite a parent decision made while verification is running', async () => {
-  await request('PUT', `/children/${childId}/policy`, parent, { ...policy, mode: 'ai', aiConsent: true });
+test('transcription cannot overwrite a parent decision already made', async () => {
+  await request('PUT', `/children/${childId}/policy`, parent, aiPolicy);
   let complete!: () => void;
   let began!: () => void;
   const started = new Promise<void>(resolve => { began = resolve; });
   const blocked = new Promise<void>(resolve => { complete = resolve; });
-  verifier = async () => {
+  transcribe = async () => {
     began(); await blocked;
-    return { isRecitation: true, matchesSurah: true, coverage: 1, confidence: 1, feedback: 'Lengkap.' };
+    return 'قل هو الله أحد';
   };
   const uploading = upload();
   await started;
@@ -168,15 +183,9 @@ test('AI cannot overwrite a parent decision made while verification is running',
   assert.ok(rec);
   await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'reject' });
   complete();
-  assert.equal((await uploading).json().recitation.status, 'rejected');
-  assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 403);
-  await request('PUT', `/children/${childId}/policy`, parent, policy);
-});
-test('high confidence on unrelated audio never passes', async () => {
-  await request('PUT', `/children/${childId}/policy`, parent, { ...policy, mode: 'ai', aiConsent: true });
-  verifier = async () => ({ isRecitation: false, matchesSurah: false, coverage: 1, confidence: 1, feedback: 'Bukan bacaan surah.' });
-  const rec = (await upload()).json().recitation;
-  assert.equal(rec.status, 'pending');
+  const result = (await uploading).json().recitation;
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.hasTranscript, false);
   assert.equal((await request('POST', '/tv/authorize', child, { recitationId: rec.id })).statusCode, 403);
   await request('PUT', `/children/${childId}/policy`, parent, policy);
 });
@@ -235,17 +244,17 @@ test('server without AI key allows manual mode and rejects AI activation', async
     const token = (await manual.inject({ method: 'POST', url: '/auth/register', payload: { username: 'Ayah', password: 'kata-sandi-kuat' } })).json().token;
     const headers = { authorization: `Bearer ${token}` };
     const id = (await manual.inject({ method: 'POST', url: '/children', headers, payload: { name: 'Anak' } })).json().child.id;
-    assert.equal((await manual.inject({ method: 'PUT', url: `/children/${id}/policy`, headers, payload: { ...policy, mode: 'ai', aiConsent: true } })).statusCode, 400);
+    assert.equal((await manual.inject({ method: 'PUT', url: `/children/${id}/policy`, headers, payload: aiPolicy })).statusCode, 400);
   } finally { await manual.close(); await rm(dir, { recursive: true, force: true }); }
 });
 test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent approval', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'jagabocil-provider-'));
   let calls = 0;
-  const verify: Verify = async () => {
+  const providerTranscribe: Transcribe = async () => {
     calls++;
-    return { isRecitation: true, matchesSurah: true, coverage: 1, confidence: 1, feedback: 'Teks cocok.' };
+    return 'قل هو الله أحد';
   };
-  let family = await createApp({ dataDir: dir, verify });
+  let family = await createApp({ dataDir: dir, transcribe: providerTranscribe });
   try {
     const registration = await family.inject({ method: 'POST', url: '/auth/register', payload: { username: 'Ayah', password: 'kata-sandi-kuat' } });
     const parentHeaders = { authorization: `Bearer ${registration.json().token}` };
@@ -253,12 +262,12 @@ test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent app
     const paired = await family.inject({ method: 'POST', url: '/pair', payload: { code: created.json().pairing.code } });
     const childHeaders = { authorization: `Bearer ${paired.json().token}` };
     const policyUrl = `/children/${created.json().child.id}/policy`;
-    const optIn = () => family.inject({ method: 'PUT', url: policyUrl, headers: parentHeaders, payload: { ...policy, mode: 'ai', aiConsent: true } });
+    const optIn = () => family.inject({ method: 'PUT', url: policyUrl, headers: parentHeaders, payload: aiPolicy });
     const data = multipart(wav(11));
     const submit = () => family.inject({ method: 'POST', url: '/recitations', headers: { ...data.headers, ...childHeaders }, payload: data.payload });
     assert.equal((await optIn()).statusCode, 200);
     await family.close();
-    family = await createApp({ dataDir: dir, verify, aiProvider: 'deepseek' });
+    family = await createApp({ dataDir: dir, transcribe: providerTranscribe, aiProvider: 'deepseek' });
     const dashboard = (await family.inject({ url: '/dashboard', headers: parentHeaders })).json();
     assert.equal(dashboard.children[0].mode, 'manual');
     assert.equal(dashboard.children[0].aiConsent, false);
@@ -268,7 +277,7 @@ test('a switch from Gemini to DeepSeek needs a fresh opt-in and keeps parent app
     const rec = (await submit()).json().recitation;
     assert.equal(calls, 1);
     assert.equal(rec.status, 'pending');
-    assert.match(rec.feedback, /Teks cocok/);
+    assert.equal(rec.hasTranscript, true);
     const authorize = () => family.inject({ method: 'POST', url: '/tv/authorize', headers: childHeaders, payload: { recitationId: rec.id } });
     assert.equal((await authorize()).statusCode, 403);
     const review = await family.inject({ method: 'POST', url: `/recitations/${rec.id}/review`, headers: parentHeaders, payload: { decision: 'approve' } });
@@ -458,4 +467,66 @@ test('child account chooses a TV and surah, then needs review for one power perm
   assert.equal(permit.statusCode, 200);
   assert.equal(permit.json().tvHost, '192.168.1.25');
   assert.equal((await authorize(anotherTv.json().child.tvRevision)).statusCode, 403);
+});
+
+test('book review tolerates word errors, preserves its excerpt, and requires a parent decision', async () => {
+  const credentials = { username: 'DinaBuku', password: 'kata-baru' };
+  const created = await request('POST', '/children/accounts', parent, { ...credentials, name: 'Dina' });
+  assert.equal(created.statusCode, 201);
+  const profile = created.json().child;
+  const login = await request('POST', '/auth/child/login', '', credentials);
+  assert.equal(login.statusCode, 200);
+  const token = login.json().token;
+  const bookReading = { title: 'Kebun kecil', text: 'Pagi ini kami berjalan bersama ke kebun kecil dekat rumah.' };
+  const policyPath = `/children/${profile.id}/policy`;
+  const configure = (book: typeof bookReading) => request('PUT', policyPath, parent, { ...aiPolicy, bookReading: book });
+  assert.equal((await configure({ title: bookReading.title, text: 'Terlalu singkat.' })).statusCode, 400);
+  const configured = await configure(bookReading);
+  assert.equal(configured.statusCode, 200);
+  const revision = configured.json().child.tvRevision;
+  const children = (await request('GET', '/dashboard?reading=extended', token)).json().children;
+  assert.deepEqual(children[0].bookReading, bookReading);
+  const submit = (rev: number) => {
+    const form = new FormData();
+    form.set('audio', new Blob([new Uint8Array(wav(11))], { type: 'audio/wav' }), 'buku.wav');
+    return app.inject({
+      method: 'POST', url: `/recitations?kind=book&revision=${rev}`,
+      remoteAddress: '127.0.0.3', headers: { authorization: `Bearer ${token}` }, payload: form,
+    });
+  };
+  const transcript = 'PAGI ini kita berjalan ke kebun mungil dekat rumah!';
+  transcribe = async () => transcript;
+  assert.equal((await submit(revision - 1)).statusCode, 409);
+  const uploaded = await submit(revision);
+  assert.equal(uploaded.statusCode, 201);
+  const rec = uploaded.json().recitation;
+  assert.equal(rec.readingKind, 'book');
+  assert.equal(rec.bookTitle, bookReading.title);
+  assert.equal(rec.status, 'pending');
+  assert.equal(rec.hasTranscript, true);
+  const legacy = (await request('GET', '/dashboard', parent)).json();
+  assert.ok(!legacy.recitations.some((r: { id: string }) => r.id === rec.id));
+  const extended = (await request('GET', '/dashboard?reading=extended', parent)).json();
+  assert.ok(extended.recitations.some((r: { id: string }) => r.id === rec.id));
+  const detailsPath = `/recitations/${rec.id}/reading-details`;
+  assert.equal((await request('GET', detailsPath, token)).statusCode, 403);
+  assert.deepEqual((await request('GET', detailsPath, parent)).json(), {
+    referenceText: bookReading.text, transcript, matchScore: 70, matchThreshold: 65,
+  });
+  const authorize = () => request('POST', '/tv/authorize', token, { recitationId: rec.id });
+  assert.equal((await authorize()).statusCode, 403);
+  assert.equal((await request('POST', `/recitations/${rec.id}/review`, parent, { decision: 'approve' })).statusCode, 200);
+  assert.equal((await authorize()).statusCode, 200);
+  assert.equal((await authorize()).statusCode, 403);
+
+  transcribe = async () => 'Sepeda biru itu berhenti di tengah jalan.';
+  const different = await submit(revision);
+  assert.equal(different.statusCode, 201);
+  const differentRec = different.json().recitation;
+  assert.equal(differentRec.status, 'pending');
+  const differentDetails = (await request('GET', `/recitations/${differentRec.id}/reading-details`, parent)).json();
+  assert.ok(differentDetails.matchScore < differentDetails.matchThreshold);
+  assert.equal((await configure({ title: '', text: '' })).statusCode, 200);
+  assert.equal((await submit(revision)).statusCode, 409);
+  assert.equal((await request('GET', detailsPath, parent)).json().referenceText, bookReading.text);
 });

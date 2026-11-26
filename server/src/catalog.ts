@@ -22,10 +22,6 @@ export function taskSurah(id: string) {
   return { id, name: chapter.name, verses: chapter.ayahs.length, arabic: chapter.ayahs.join('\n') };
 }
 
-export function transcriptionReference(id: string) {
-  return isTaskSurah(id) ? quran.transcription[id as keyof typeof quran.transcription] : undefined;
-}
-
 // Older Android builds read the task and history text from their dashboard.
 export function legacySurahs(referencedIds: Iterable<string> = []) {
   return Array.from(new Set(['112', '113', '114', ...referencedIds])).flatMap(id => {

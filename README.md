@@ -1,6 +1,6 @@
 # JagaBocil
 
-Aplikasi Android untuk membangun kebiasaan **ngaji sebelum memakai tombol power TV**. Anak merekam bacaan, AI atau orang tua memeriksanya, lalu server memberikan izin satu kali power. Antarmuka berbahasa Indonesia, dibuat dengan Kotlin dan Jetpack Compose.
+Aplikasi Android untuk membangun kebiasaan **ngaji atau baca buku sebelum menyalakan TV**. Anak merekam bacaan, orang tua memeriksa, lalu server memberikan izin satu kali power. Antarmuka berbahasa Indonesia, dibuat dengan Kotlin dan Jetpack Compose.
 
 Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S3 privat** untuk penyimpanan cloud. Mode SQLite + filesystem lokal tetap tersedia untuk pengembangan dan instalasi lama. AI bersifat opsional.
 
@@ -8,11 +8,12 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 
 - Orang tua membuat akun anak dari menu **Keluarga**. Anak masuk dengan username dan kata sandinya sendiri. Username baru terdiri dari 3–32 karakter, dengan kata sandi minimal 4 karakter.
 - Anak memilih sendiri salah satu dari 37 surah Juz 30 sebelum merekam. Layar bacaan menampilkan teks Arab per ayat, perekam, dan pratinjau audio.
+- Untuk **Baca buku**, orang tua mengisi satu judul dan kutipan buku per anak di **Keluarga → Ubah aturan**. Anak membuka kutipan dari Beranda, lalu merekam bacaannya.
 - Menu **Al-Qur’an** dapat dibuka sebelum masuk. Juz 30 ikut di dalam APK. Untuk 77 surah lainnya, pilih surah dan tekan **Unduh surah**. Teks yang sudah diunduh tersimpan per HP dan dapat dibaca lagi tanpa internet.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
 - Notifikasi Android untuk rekaman baru dan hasil review. Aktifkan di **Keluarga** pada HP orang tua dan di **Panduan** pada HP anak. Aplikasi memeriksa saat dibuka dan memakai pekerjaan berkala saat di latar belakang. Android menjadwalkan pekerjaan tersebut dengan interval minimal 15 menit dan bisa menundanya.
 - Kode pemulihan sekali pakai tanpa email. Orang tua membuat kode di **Keluarga → Pemulihan akun** dengan kata sandi saat ini. Simpan kode saat ditampilkan. Untuk menggunakannya, pilih **Lupa kata sandi?** di layar masuk. Setelah berhasil, sesi lama akun orang tua berakhir dan perangkat anak tetap terhubung.
-- **AI opsional:** DeepSeek mencocokkan teks hasil transkripsi dengan surah tugas. Orang tua tetap mendengar rekaman dan memutuskan. Jika server memakai Gemini, bacaan yang dikenali lengkap dengan confidence dan coverage ≥95% bisa disetujui otomatis. Orang tua perlu menyetujui pengiriman audio ke penyedia yang aktif.
+- Jika **Bantuan AI** aktif, orang tua mendapat transkripsi ngaji untuk dicocokkan dengan teks surah. Untuk buku, JagaBocil menampilkan transkripsi dan kemiripan kata dengan kutipan, memakai ambang awal 65%. Penghitungan mengabaikan kapitalisasi dan tanda baca. Orang tua menyetujui pengiriman audio dan penyimpanan transkripsi, lalu memutuskan hasil bacaan.
 - Izin server berlaku 1–60 menit setelah disetujui dan dikonsumsi atomik sekali saja. Mengganti aturan, mencabut perangkat, atau menghapus rekaman membatalkan izin yang belum dipakai.
 - Dua metode koneksi: **infrared** Samsung/LG 38 kHz atau **Wi-Fi lokal**. Pilihan platform Wi-Fi: Android TV/Google TV (Remote Service v2), Samsung Tizen (WSS), LG webOS (SSAP/WSS), dan Wake-on-LAN. Driver jaringan masih perlu pengujian pada TV fisik; lihat [matriks kompatibilitas](docs/tv-compatibility.md).
 - Riwayat, pemutaran audio privat, penghapusan oleh orang tua, dan pencabutan sesi anak. Antrean orang tua dan status bacaan yang menunggu diperbarui di belakang layar saat tampilan terkait aktif.
@@ -44,7 +45,7 @@ npm run dev
 
 API tersedia di `http://localhost:8787`. `GET /health` menampilkan jenis database, penyimpanan audio, dan penyedia AI aktif tanpa login. `.env.local` yang gitignored dapat menimpa konfigurasi `.env`. Tanpa `DATABASE_URL`, data lokal tersimpan di `server/data/`. Dengan URL, API memakai schema `jagabocil` di PostgreSQL. Lihat [setup Neon dan S3](docs/backend-storage.md).
 
-Isi `DEEPSEEK_API_KEY` di environment server untuk menggunakan [DeepSeek Speech to Text](https://api-docs.deepseek.com/guides/asr/). Server mengubah rekaman hingga 120 detik ke PCM WAV sebelum dikirim dan menyimpan hasil cocok atau tidak cocok sebagai catatan untuk orang tua. Teks transkripsi tidak disimpan. Rekaman yang lebih panjang atau gagal ditranskripsi tetap masuk antrean orang tua. Orang tua yang sebelumnya mengaktifkan Gemini harus menyimpan ulang persetujuan mode AI setelah penyedia berganti.
+Isi `DEEPSEEK_API_KEY` di environment server untuk menggunakan [DeepSeek Speech to Text](https://api-docs.deepseek.com/guides/asr/). Server mengubah rekaman hingga 120 detik ke PCM WAV sebelum dikirim. JagaBocil menyimpan transkripsi privat bersama metadata rekaman. Rekaman yang lebih panjang atau gagal ditranskripsi tetap masuk antrean orang tua. Orang tua perlu mengaktifkan ulang izin AI setelah pembaruan fitur ini atau pergantian penyedia.
 
 Jika `DEEPSEEK_API_KEY` kosong, server dapat memakai `GEMINI_API_KEY`. `AI_MODEL` memilih model Gemini yang mendukung audio dan structured output pada Interactions API. Default-nya `gemini-4-hydrogen` dan interaksi dikirim dengan `store: false`. Simpan semua key di environment server.
 
@@ -69,10 +70,10 @@ cd android
 
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
-1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Fitur akun anak memerlukan versi API yang sesuai dan schema PostgreSQL versi 5.
+1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Fitur baca buku dan transkripsi memerlukan versi API yang sesuai dan schema PostgreSQL versi 6.
 2. Masuk sebagai **Orang tua** dan buat akun anak. Untuk profil lama, buka **Keluarga → Siapkan login anak** agar profil dan riwayat tetap dipakai.
-3. Di HP anak, pilih **Aku anak** dan masukkan username serta kata sandi anak. Dari **Pilih surah**, pilih bacaan Juz 30. Rekam, dengarkan bila perlu, lalu pilih **Kirim bacaan**.
-4. Di HP orang tua, buka bacaan dari antrean **Beranda** atau notifikasi. Pilih **Setujui** atau **Minta ulang**.
+3. Di HP anak, pilih **Aku anak** dan masukkan username serta kata sandi anak. Pilih **Ngaji** untuk memilih surah Juz 30 atau **Baca buku** untuk membuka kutipan yang disiapkan. Rekam, dengarkan bila perlu, lalu pilih **Kirim bacaan**.
+4. Di HP orang tua, buka bacaan dari antrean **Beranda** atau notifikasi. Baca transkripsi atau putar audio, lalu pilih **Setujui** atau **Minta ulang**.
 5. Di HP anak, pilih perangkat dari **TV saya → Cari TV di Wi-Fi**. Ikuti petunjuk di layar TV bila diminta. Anak juga bisa mengatur TV sebelum mengirim bacaan. Setelah rekaman disetujui, tombol **Nyalakan TV** menggunakan izin satu kali.
 
 Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua. Satu instalasi menyimpan satu sesi. Setelah login anak disiapkan atau diganti, masuk kembali di HP anak. Distribusi Play Store belum tersedia.
@@ -93,11 +94,11 @@ Password di-hash dengan scrypt + salt. Token acak disimpan dalam bentuk hash di 
 
 Kode pemulihan memiliki entropi 128 bit, disimpan sebagai hash, dan dikonsumsi atomik saat dipakai. Membuat kode baru membatalkan kode sebelumnya. Pemberitahuan Android hanya menyertakan status umum tanpa nama anak atau isi rekaman.
 
-Audio dan riwayat otomatis dihapus setelah 7 hari, melalui cleanup saat startup dan setiap jam. Jika penghapusan S3 gagal, metadata dipertahankan agar cleanup dapat mencoba ulang; rekaman yang sedang dihapus langsung diblokir dari playback dan izin power. Orang tua dapat menghapus lebih awal di riwayat. Cache audio HP dibersihkan setelah dipakai, logout, atau startup berikutnya; rekaman terputus saat aplikasi masuk background dibatalkan. Backup host, disk encryption, dan kebijakan penyedia AI mengikuti konfigurasi operator server. Jangan mengaktifkan AI tanpa memahami pemrosesan audio anak oleh penyedia.
+Audio, transkripsi, dan riwayat otomatis dihapus setelah 7 hari, melalui cleanup saat startup dan setiap jam. Hanya orang tua dalam keluarga terkait yang dapat membuka transkripsi. Jika penghapusan S3 gagal, metadata dipertahankan agar cleanup dapat mencoba ulang; rekaman yang sedang dihapus langsung diblokir dari playback dan izin power. Orang tua dapat menghapus lebih awal di riwayat. Cache audio HP dibersihkan setelah dipakai, logout, atau startup berikutnya; rekaman terputus saat aplikasi masuk background dibatalkan. Backup host, disk encryption, dan kebijakan penyedia AI mengikuti konfigurasi operator server. Jangan mengaktifkan AI tanpa memahami pemrosesan audio anak oleh penyedia.
 
 ## Sumber Al-Qur’an
 
-Katalog menyimpan 114 surah dan 6.236 ayat dari [Tanzil Quran Text](https://tanzil.net/download/) edisi Uthmani 1.1, dengan urutan ayat yang diperiksa terhadap metadata Tanzil dan katalog Kebun Ngaji. Edisi Simple Clean dipakai sebagai pembanding transkripsi DeepSeek. Pemberitahuan hak cipta asli tersimpan bersama edisi masing-masing di `server/src/quran.json`. Teks Arab di Android menggunakan [Amiri Quran](https://github.com/aliftype/amiri/releases/tag/1.003) dengan lisensi SIL OFL yang ikut di APK.
+Katalog menyimpan 114 surah dan 6.236 ayat dari [Tanzil Quran Text](https://tanzil.net/download/) edisi Uthmani 1.1, dengan urutan ayat yang diperiksa terhadap metadata Tanzil dan katalog Kebun Ngaji. Pemberitahuan hak cipta asli tersimpan bersama edisi masing-masing di `server/src/quran.json`. Teks Arab di Android menggunakan [Amiri Quran](https://github.com/aliftype/amiri/releases/tag/1.003) dengan lisensi SIL OFL yang ikut di APK.
 
 Build Android hanya menyalin teks Juz 30. Untuk surah di luar Juz 30, katalog lokal memuat nama, nomor, jumlah ayat, dan hash teks. APK memeriksa respons `GET /quran/surahs/:id` terhadap katalog itu sebelum menyimpan satu surah. Endpoint tersebut menyajikan teks publik tanpa memerlukan token keluarga.
 

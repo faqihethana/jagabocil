@@ -11,7 +11,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { isTaskSurah, legacySurahs, quranNotice, quranText, taskRecordingLimit } from './catalog.js';
-import { passes, verdictSchema, type Verify } from './ai.js';
+import type { Transcribe } from './ai.js';
+import { bookMatchScore, bookMatchThreshold, maxAiReadingSeconds, readingWords } from './book-reading.js';
 import { billing } from './billing.js';
 import type { Midtrans } from './midtrans.js';
 
@@ -35,11 +36,11 @@ function isPrivateIpv4(host: string) {
 }
 type TokenRole = 'parent' | 'child' | 'child_account';
 type Actor = { role: 'parent' | 'child'; accountLogin: boolean; id: string; authRevision: number; tokenHash: string; expires: number };
-type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
-type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
-// The original consent value (1) covered Gemini. DeepSeek requires a fresh opt-in.
-const aiConsentByProvider = { gemini: 1, deepseek: 2 } as const;
-type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; verify?: Verify; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
+type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null; book_title: string; book_text: string };
+type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null; reading_kind: 'quran' | 'book'; book_title: string | null; reference_text: string | null; transcript: string | null; match_score: number | null; transcript_available?: boolean | number };
+// Values 1 and 2 covered sending audio without keeping transcripts.
+const aiConsentByProvider = { gemini: 3, deepseek: 4 } as const;
+type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; transcribe?: Transcribe; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
 class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }
 const fail = (code: number, message: string): never => { throw new HttpError(code, message); };
 
@@ -64,7 +65,7 @@ async function passwordMatches(password: string, stored: string) {
 
 export async function createApp(options: Options) {
   const now = options.now ?? Date.now;
-  const aiProvider = options.verify ? (options.aiProvider ?? 'gemini') : null;
+  const aiProvider = options.transcribe ? (options.aiProvider ?? 'gemini') : null;
   const hasAiConsent = (child: Child) => aiProvider !== null && child.ai_consent === aiConsentByProvider[aiProvider];
   const dataDir = resolve(options.dataDir);
   await mkdir(join(dataDir, 'recordings'), { recursive: true, mode: 0o700 });
@@ -127,8 +128,8 @@ export async function createApp(options: Options) {
     return rec;
   }
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
-  const publicChild = (c: Child) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c) });
-  const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer });
+  const publicChild = (c: Child, extended = true) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c), bookReading: extended && c.book_title ? { title: c.book_title, text: c.book_text } : undefined });
+  const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer, readingKind: r.reading_kind, bookTitle: r.book_title, hasTranscript: Boolean(r.transcript_available ?? r.transcript) });
   const awaitingTv = (c: Child) => c.tv_transport === 'infrared' && c.tv_brand === 'none';
   // The capability belongs to a recently paired device and the policy revision it received.
   const tvSetupUntil = (a: Actor) => a.expires - sessionDuration + setupDuration;
@@ -284,29 +285,42 @@ export async function createApp(options: Options) {
   });
   app.put('/children/:id/policy', async req => {
     const a = await actor(req, 'parent'); const c = (await childFor(a, paramId(req)));
-    const p = tvSettings.extend({ mode: z.enum(['manual', 'ai']), surahId: z.string().refine(isTaskSurah), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), aiConsent: z.boolean() }).parse(req.body);
+    const p = tvSettings.extend({
+      mode: z.enum(['manual', 'ai']), surahId: z.string().refine(isTaskSurah), minSeconds: z.number().int().min(10).max(120),
+      unlockMinutes: z.number().int().min(1).max(60), aiConsent: z.boolean(), transcriptConsent: z.boolean().optional(),
+      bookReading: z.object({ title: z.string().trim().max(80), text: z.string().trim().max(1600) }).optional(),
+    }).parse(req.body);
     validateTv(p);
-    if (p.mode === 'ai' && (!p.aiConsent || !aiProvider)) return fail(400, 'AI perlu persetujuan orang tua dan konfigurasi server.');
+    if (p.mode === 'ai' && (!p.aiConsent || !p.transcriptConsent || !aiProvider)) return fail(400, 'Aktifkan izin pengiriman audio dan penyimpanan transkripsi di aplikasi terbaru.');
+    const book = p.bookReading;
+    if (book && (book.title || book.text) && (!book.title || readingWords(book.text).length < 8)) {
+      return fail(400, 'Masukkan judul buku dan kutipan dengan minimal 8 kata.');
+    }
     const consent = p.mode === 'ai' && aiProvider ? aiConsentByProvider[aiProvider] : 0;
     await db.batch([
-      { sql: 'UPDATE children SET mode=?,surah_id=?,min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,revision=revision+1 WHERE id=?', values: [p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, consent, p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, c.id] },
-      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Aturan diperbarui. Yuk, rekam ngaji lagi.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
+      { sql: 'UPDATE children SET mode=?,surah_id=?,min_seconds=?,unlock_minutes=?,tv_brand=?,ai_consent=?,tv_transport=?,tv_mac=?,tv_platform=?,tv_host=?,book_title=COALESCE(?,book_title),book_text=COALESCE(?,book_text),revision=revision+1 WHERE id=?', values: [p.mode, p.surahId, p.minSeconds, p.unlockMinutes, p.tvBrand, consent, p.tvTransport, p.tvMac, p.tvPlatform, p.tvHost, book?.title ?? null, book?.text ?? null, c.id] },
+      { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Aturan diperbarui. Yuk, rekam bacaan baru.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
     ]);
-    return { child: publicChild((await childFor(a, c.id))) };
+    return { child: publicChild((await childFor(a, c.id)), true) };
   });
   app.get('/dashboard', async req => {
     const a = await actor(req);
     const children = a.role === 'parent' ? (await all<Child>('SELECT * FROM children WHERE parent_id=? ORDER BY name,id', a.id)) : [(await childFor(a, a.id))];
+    const query = req.query as { quran?: string; reading?: string };
+    const extended = query.reading === 'extended';
+    const recitationSummary = `SELECT r.id,r.child_id,r.surah_id,r.status,r.duration,r.created_at,r.ready_at,r.reviewed_at,
+      r.expires_at,r.used_at,r.feedback,r.reviewer,r.reading_kind,r.book_title,r.transcript IS NOT NULL AS transcript_available FROM recitations r`;
+    const visible = "AND r.status NOT IN ('uploading','failed','deleting') AND (r.reading_kind='quran' OR ?=1)";
     const recs = a.role === 'parent'
-      ? (await all<Recitation>("SELECT r.* FROM recitations r JOIN children c ON c.id=r.child_id WHERE c.parent_id=? AND r.status NOT IN ('uploading','failed','deleting') ORDER BY r.created_at DESC LIMIT 100", a.id))
-      : (await all<Recitation>("SELECT * FROM recitations WHERE child_id=? AND status NOT IN ('uploading','failed','deleting') ORDER BY created_at DESC LIMIT 50", a.id));
+      ? await all<Recitation>(`${recitationSummary} JOIN children c ON c.id=r.child_id WHERE c.parent_id=? ${visible} ORDER BY r.created_at DESC LIMIT 100`, a.id, Number(extended))
+      : await all<Recitation>(`${recitationSummary} WHERE r.child_id=? ${visible} ORDER BY r.created_at DESC LIMIT 50`, a.id, Number(extended));
     const parent = a.role === 'parent' ? await one<{ name: string; recovery_hash: string | null }>('SELECT name,recovery_hash FROM parents WHERE id=?', a.id) : undefined;
-    const localQuran = (req.query as { quran?: string }).quran === 'local';
+    const localQuran = query.quran === 'local';
     const surahs = localQuran ? [] : legacySurahs([...children.map(c => c.surah_id), ...recs.map(r => r.surah_id)]);
     const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
     const firstChild = children[0];
     const setup = a.role === 'child' && !a.accountLogin && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
-    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
+    return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(c => publicChild(c, extended)), recitations: recs.map(publicRec), surahs, juz30Tasks: true, readingActivities: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
     const a = await actor(req, 'child'); const c = (await childFor(a, a.id));
@@ -316,11 +330,17 @@ export async function createApp(options: Options) {
       if (part.type === 'file') { buffer = await part.toBuffer(); if (part.file.truncated) return fail(413, 'Rekaman maksimal 10 MB.'); }
       else if (part.fieldname === 'surahId') surahId = String(part.value);
     }
-    const selfSelected = (req.query as { selection?: string }).selection === 'self';
-    if (!buffer?.length || !surahId || (selfSelected ? !isTaskSurah(surahId) : surahId !== c.surah_id)) {
+    const query = req.query as { selection?: string; kind?: string; revision?: string };
+    const isBook = query.kind === 'book';
+    const selfSelected = query.selection === 'self';
+    if (!buffer?.length) return fail(400, 'Sertakan rekaman bacaanmu.');
+    if (isBook) {
+      if (query.revision !== String(c.revision)) return fail(409, 'Aturan bacaan diperbarui. Muat ulang lalu rekam ulang.');
+      if (!c.book_title || !c.book_text) return fail(400, 'Minta orang tua menyiapkan kutipan buku terlebih dahulu.');
+    } else if (!surahId || (selfSelected ? !isTaskSurah(surahId) : surahId !== c.surah_id)) {
       return fail(400, selfSelected ? 'Pilih surah Juz 30 dan sertakan rekaman bacaanmu.' : 'Kirim rekaman sesuai surah tugasmu.');
     }
-    const maxSeconds = taskRecordingLimit(surahId);
+    const maxSeconds = isBook ? 180 : taskRecordingLimit(surahId!);
     const id = randomUUID(); const path = join(dataDir, 'tmp', `${id}.audio`);
     await writeFile(path, buffer, { mode: 0o600 });
     let duration: number; let mime: string;
@@ -334,7 +354,9 @@ export async function createApp(options: Options) {
       return fail(400, `Gunakan rekaman audio M4A/WAV sepanjang ${c.min_seconds}–${maxSeconds} detik.`);
     } finally { await unlink(path).catch(() => {}); }
     const reference = recordings.reference(id, c.id);
-    const inserted = (await change('INSERT INTO recitations(id,child_id,surah_id,status,duration,path,mime,created_at,feedback) SELECT ?,?,?,?,?,?,?,?,? FROM children WHERE id=? AND revision=?', id, c.id, surahId, 'uploading', duration, reference, mime, now(), 'Menunggu orang tua mendengarkan.', c.id, c.revision));
+    const inserted = await change(`INSERT INTO recitations(id,child_id,surah_id,status,duration,path,mime,created_at,feedback,reading_kind,book_title,reference_text)
+      SELECT ?,?,?,?,?,?,?,?,?,?,?,? FROM children WHERE id=? AND revision=?`, id, c.id, isBook ? '' : surahId!, 'uploading', duration,
+      reference, mime, now(), 'Menunggu orang tua mendengarkan.', isBook ? 'book' : 'quran', isBook ? c.book_title : null, isBook ? c.book_text : null, c.id, c.revision);
     if (!inserted.changes) return fail(409, 'Aturan atau perangkat diperbarui. Muat ulang dan rekam bacaan baru.');
     try {
       await recordings.put(id, c.id, buffer, mime);
@@ -350,12 +372,16 @@ export async function createApp(options: Options) {
       await change('DELETE FROM recitations WHERE id=?', id);
       return fail(409, 'Aturan atau perangkat diperbarui. Rekam bacaan baru sesuai tugasmu.');
     }
-    if (c.mode === 'ai' && hasAiConsent(c) && options.verify) {
+    if (c.mode === 'ai' && hasAiConsent(c) && options.transcribe) {
       try {
-        const verdict = verdictSchema.parse(await options.verify(buffer, mime, surahId, duration));
-        const approved = aiProvider === 'gemini' && passes(verdict);
-        const reviewTime = approved ? now() : null;
-        await change("UPDATE recitations SET status=?,expires_at=?,feedback=?,reviewer='ai',reviewed_at=? WHERE id=? AND status='pending' AND reviewer IS NULL", approved ? 'approved' : 'pending', reviewTime === null ? null : reviewTime + c.unlock_minutes * 60_000, approved ? verdict.feedback : `Perlu pemeriksaan orang tua. ${verdict.feedback}`, reviewTime, id);
+        if (duration > maxAiReadingSeconds) throw Error('Recording exceeds the transcription limit.');
+        const transcript = (await options.transcribe(buffer, mime, duration)).trim().slice(0, 8000);
+        if (!readingWords(transcript).length) throw Error('No intelligible words.');
+        const score = isBook ? bookMatchScore(c.book_text, transcript) : null;
+        const feedback = score === null ? 'Transkripsi siap. Cocokkan dengan teks surah dan dengarkan rekaman.'
+          : score >= bookMatchThreshold ? 'Transkripsi cukup cocok dengan kutipan buku.' : 'Transkripsi perlu dicocokkan ulang dengan kutipan buku.';
+        await change("UPDATE recitations SET transcript=?,match_score=?,feedback=? WHERE id=? AND status='pending' AND reviewer IS NULL",
+          transcript, score, feedback, id);
       } catch {
         await change("UPDATE recitations SET feedback='AI belum bisa memeriksa. Rekaman diteruskan ke orang tua.' WHERE id=? AND status='pending' AND reviewer IS NULL", id);
       }
@@ -368,13 +394,20 @@ export async function createApp(options: Options) {
     if (['uploading', 'failed', 'deleting'].includes(r.status)) return fail(409, 'Rekaman belum siap diputar.');
     return reply.type(r.mime).send(await recordings.get(r.path));
   });
+  app.get('/recitations/:id/reading-details', async (req, reply) => {
+    const a = await actor(req, 'parent'); const r = await recFor(a, paramId(req));
+    if (r.created_at < now() - 7 * day) return fail(410, 'Rekaman sudah kedaluwarsa.');
+    if (['uploading', 'failed', 'deleting'].includes(r.status)) return fail(409, 'Rekaman belum siap dibuka.');
+    reply.header('cache-control', 'private, no-store');
+    return { transcript: r.transcript, referenceText: r.reference_text, matchScore: r.match_score, matchThreshold: bookMatchThreshold };
+  });
   app.post('/recitations/:id/review', async req => {
     const a = await actor(req, 'parent'); const r = (await recFor(a, paramId(req))); const c = (await childFor(a, r.child_id));
     const { decision } = z.object({ decision: z.enum(['approve', 'reject']) }).parse(req.body);
     const approved = decision === 'approve';
     if (r.created_at < now() - 7 * day) return fail(410, 'Rekaman sudah kedaluwarsa.');
     const reviewTime = now();
-    const updated = await change("UPDATE recitations SET status=?,expires_at=?,reviewer='parent',feedback=?,reviewed_at=? WHERE id=? AND status='pending' AND used_at IS NULL", approved ? 'approved' : 'rejected', approved ? reviewTime + c.unlock_minutes * 60_000 : null, approved ? 'Disetujui orang tua. Terima kasih sudah mengaji!' : 'Yuk, coba mengaji lagi. Orang tua ingin mendengar lebih jelas.', reviewTime, r.id);
+    const updated = await change("UPDATE recitations SET status=?,expires_at=?,reviewer='parent',feedback=?,reviewed_at=? WHERE id=? AND status='pending' AND used_at IS NULL", approved ? 'approved' : 'rejected', approved ? reviewTime + c.unlock_minutes * 60_000 : null, approved ? 'Disetujui orang tua. Terima kasih sudah membaca!' : 'Yuk, coba baca lagi. Orang tua ingin mendengar lebih jelas.', reviewTime, r.id);
     if (!updated.changes) return fail(409, 'Rekaman ini sudah diperiksa.');
     return { recitation: publicRec((await one<Recitation>('SELECT * FROM recitations WHERE id=?', r.id))!) };
   });

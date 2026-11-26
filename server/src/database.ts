@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 5;
+const schemaVersion = 6;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -89,6 +89,18 @@ export const migration = (schema: string) => {
       ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS password TEXT;
       ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS account_revision INTEGER NOT NULL DEFAULT 0;
       CREATE UNIQUE INDEX IF NOT EXISTS children_username ON ${s}.children(username) WHERE username IS NOT NULL;
+      INSERT INTO ${s}.schema_migrations(version) VALUES(5) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS book_title TEXT NOT NULL DEFAULT '';
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS book_text TEXT NOT NULL DEFAULT '';
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS reading_kind TEXT NOT NULL DEFAULT 'quran';
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS book_title TEXT;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS reference_text TEXT;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS transcript TEXT;
+      ALTER TABLE ${s}.recitations ADD COLUMN IF NOT EXISTS match_score INTEGER;
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

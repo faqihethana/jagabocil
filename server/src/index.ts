@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
-import { createVerifier } from './ai.js';
-import { createDeepSeekVerifier } from './deepseek.js';
+import { createGeminiTranscriber } from './ai.js';
+import { createDeepSeekTranscriber } from './deepseek.js';
 import { postgresDatabase } from './database.js';
 import { s3Recordings, verifyPrivateS3 } from './recordings.js';
 import { midtransSandbox } from './midtrans.js';
@@ -27,8 +27,8 @@ const app = await createApp({
   midtrans,
   recordings: useS3 ? s3Recordings(s3) : undefined,
   aiProvider: deepSeekKey ? 'deepseek' : 'gemini',
-  verify: deepSeekKey ? createDeepSeekVerifier(deepSeekKey)
-    : geminiKey ? createVerifier(geminiKey, process.env.AI_MODEL || 'gemini-4-hydrogen') : undefined,
+  transcribe: deepSeekKey ? createDeepSeekTranscriber(deepSeekKey)
+    : geminiKey ? createGeminiTranscriber(geminiKey, process.env.AI_MODEL || 'gemini-4-hydrogen') : undefined,
 });
 await app.listen({ host: process.env.HOST || '0.0.0.0', port: Number(process.env.PORT || 8787) });
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { void app.close(); });

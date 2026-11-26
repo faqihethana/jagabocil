@@ -128,7 +128,9 @@ class MainActivity : ComponentActivity() {
             }
         }) { insets ->
         Column(Modifier.padding(insets).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (vm.busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Forest, trackColor = Mint)
+            if (vm.busy && !vm.checkingReadingResult) {
+                LinearProgressIndicator(Modifier.fillMaxWidth(), color = Forest, trackColor = Mint)
+            }
             val data = vm.dashboard
             when {
                 vm.screen == "quran" -> QuranScreen(vm.quran, vm.api) { vm.screen = "home" }
@@ -225,9 +227,9 @@ class MainActivity : ComponentActivity() {
                     FamilyIllustration(Modifier.fillMaxWidth().height(228.dp + extraSpace * 0.24f).padding(8.dp))
                 }
                 Column(Modifier.padding(horizontal = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Ngaji dulu,\nbaru nonton.", Modifier.semantics { heading() },
+                    Text("Baca dulu,\nbaru nonton.", Modifier.semantics { heading() },
                         style = MaterialTheme.typography.headlineLarge, color = Ink)
-                    Text("Rekam bacaan untuk mendapat izin nonton TV.",
+                    Text("Ngaji atau baca buku untuk mendapat izin nonton TV.",
                         style = MaterialTheme.typography.bodyLarge, color = Muted)
                 }
                 Column(Modifier.padding(top = extraSpace * 0.23f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -310,7 +312,7 @@ class MainActivity : ComponentActivity() {
         pending.sortedBy { it.createdAt }.forEach { rec ->
             key(rec.id) {
                 val child = data.children.find { it.id == rec.childId }
-                TaskLink("${child?.name ?: "Anak"} · ${vm.quran.name(rec.surahId)}",
+                TaskLink("${child?.name ?: "Anak"} · ${rec.readingTitle(vm.quran)}",
                     "${time(rec.createdAt)} · ${rec.duration.roundToInt()} detik", Icons.Outlined.Headphones, Rose) {
                     vm.openReview(rec.id)
                 }
@@ -363,7 +365,7 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.size(42.dp).background(Soft, CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Outlined.MenuBook, null) }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(vm.quran.name(r.surahId), fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                    Text(r.readingTitle(vm.quran), fontWeight = FontWeight.Bold, fontSize = 17.sp)
                     Text("${data.children.find { it.id == r.childId }?.name.orEmpty()} · ${r.duration.roundToInt()} dtk · ${time(r.createdAt)}", color = Muted, fontSize = 12.sp)
                 }
                 if (!showListenButton) IconButton(onClick = { vm.play(r) }, enabled = !vm.busy) { Icon(if (vm.playing == r.id) Icons.Outlined.StopCircle else Icons.Outlined.PlayCircle, if (vm.playing == r.id) "Hentikan" else "Dengarkan rekaman", tint = Forest, modifier = Modifier.size(32.dp)) }
@@ -375,7 +377,8 @@ class MainActivity : ComponentActivity() {
                 else -> Butter
             }
             Pill(label, statusColor, if (r.status == "pending") Amber else Ink)
-            if (r.status != "pending" || r.reviewer == "ai") Text(r.feedback, fontSize = 13.sp, color = Muted)
+            if (parent || r.status != "pending") Text(r.feedback, fontSize = 13.sp, color = Muted)
+            if (parent && (r.hasTranscript || r.readingKind == "book")) ReadingDetailsPanel(vm, r)
             if (showListenButton) OutlinedButton(onClick = { vm.play(r) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
                 Icon(if (vm.playing == r.id) Icons.Outlined.StopCircle else Icons.Outlined.PlayCircle, null)
                 Spacer(Modifier.width(8.dp)); Text(if (vm.playing == r.id) "Hentikan audio" else "Dengarkan bacaan")
@@ -451,7 +454,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun SettingsScreen(vm: AppViewModel, data: Dashboard, child: Child) {
-    var mode by remember(child.id) { mutableStateOf(child.mode) }
+    var mode by remember(child.id) { mutableStateOf(if (data.readingActivities) child.mode else "manual") }
     var surah by remember(child.id) { mutableStateOf(child.surahId) }
     var seconds by remember(child.id) { mutableFloatStateOf(child.minSeconds.toFloat()) }
     var minutes by remember(child.id) { mutableFloatStateOf(child.unlockMinutes.toFloat()) }
@@ -461,6 +464,8 @@ class MainActivity : ComponentActivity() {
     var host by remember(child.id) { mutableStateOf(child.tvHost) }
     var mac by remember(child.id) { mutableStateOf(child.tvMac) }
     var consent by remember(child.id) { mutableStateOf(child.aiConsent) }
+    var bookTitle by rememberSaveable(child.id) { mutableStateOf(child.bookReading?.title.orEmpty()) }
+    var bookText by rememberSaveable(child.id) { mutableStateOf(child.bookReading?.text.orEmpty()) }
     var revoke by remember { mutableStateOf(false) }
     var showDiscovery by remember(child.id) { mutableStateOf(false) }
     var showSurahs by remember(child.id) { mutableStateOf(false) }
@@ -476,22 +481,38 @@ class MainActivity : ComponentActivity() {
         SectionTitle("Metode pemeriksaan")
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Choice("Orang tua", mode == "manual", Modifier.weight(1f)) { mode = "manual" }
-            Choice("AI", mode == "ai", Modifier.weight(1f), data.aiAvailable) { mode = "ai" }
+            Choice("Bantuan AI", mode == "ai", Modifier.weight(1f), data.aiAvailable && data.readingActivities) { mode = "ai" }
         }
-        if (!data.aiAvailable) Text("AI belum diaktifkan di server. Pemeriksaan orang tua tetap tersedia.", color = Muted, fontSize = 12.sp)
+        if (!data.aiAvailable || !data.readingActivities) {
+            Text("Bantuan AI versi ini belum tersedia di server.", color = Muted, fontSize = 12.sp)
+        }
         if (mode == "ai") {
             Surface(color = Soft, shape = RoundedCornerShape(18.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Izinkan audio dikirim ke penyedia AI", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                        Text("Izinkan pengiriman audio dan penyimpanan transkripsi", Modifier.weight(1f), fontWeight = FontWeight.Medium)
                         Switch(checked = consent, onCheckedChange = { consent = it })
                     }
-                    Text("AI membantu mengenali bacaan, bukan sertifikasi tajwid. Rekaman yang meragukan diteruskan ke orang tua. AI tidak bisa menjamin suara berasal dari bacaan langsung anak.", color = Muted, fontSize = 12.sp)
+                    Text("AI menyalin rekaman hingga 120 detik. Untuk buku, JagaBocil juga mencocokkan teks. Transkripsi dapat dilihat orang tua selama rekaman tersimpan, hingga 7 hari.", color = Muted, fontSize = 12.sp)
                 }
             }
         }
         TaskLink("Surah awal", vm.quran.chapter(surah)?.let { "${it.name} · Anak bisa pilih surah lain" }.orEmpty(),
             Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = taskSurahs.isNotEmpty()) { showSurahs = true }
+        if (data.readingActivities) {
+            Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionTitle("Bacaan buku")
+                    Text("Opsional. Isi judul dan kutipan agar anak bisa memilih Baca buku.", color = Muted)
+                    Field("Judul buku", bookTitle, { bookTitle = it.take(80) })
+                    OutlinedTextField(
+                        value = bookText, onValueChange = { bookText = it.take(1600) },
+                        label = { Text("Teks kutipan") }, supportingText = { Text("Minimal 8 kata · ${bookText.length}/1600 karakter") },
+                        minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp),
+                    )
+                }
+            }
+        }
         Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 SectionTitle("Durasi bacaan dan izin")
@@ -535,7 +556,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         val validConnection = transport != "wifi" || (if (platform == "wol") runCatching { WakePacket.macBytes(mac) }.isSuccess else runCatching { LanAddress.parse(host) }.isSuccess && (mac.isBlank() || runCatching { WakePacket.macBytes(mac) }.isSuccess))
-        Button(onClick = { vm.policy(child, Policy(mode, surah, seconds.roundToInt(), minutes.roundToInt(), brand, consent, transport, mac, platform, host)) }, enabled = !vm.busy && validConnection && (mode != "ai" || consent && data.aiAvailable), modifier = Modifier.fillMaxWidth().height(54.dp)) { Text("Simpan aturan") }
+        val validBook = bookTitle.isBlank() && bookText.isBlank() || bookTitle.isNotBlank() && bookText.isNotBlank()
+        Button(
+            onClick = {
+                vm.policy(child, Policy(mode, surah, seconds.roundToInt(), minutes.roundToInt(), brand, consent,
+                    transport, mac, platform, host, transcriptConsent = mode == "ai" && consent,
+                    bookReading = if (data.readingActivities) BookReading(bookTitle.trim(), bookText.trim()) else null))
+            },
+            enabled = !vm.busy && validConnection && validBook && (mode != "ai" || consent && data.aiAvailable),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+        ) { Text("Simpan aturan") }
         Text("Menyimpan aturan membatalkan izin lama agar tugas baru tidak terlewati.", color = Muted, fontSize = 12.sp)
         OutlinedButton(onClick = { revoke = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Putuskan semua HP anak") }
     }
