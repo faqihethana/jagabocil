@@ -37,6 +37,10 @@ export function sqliteDatabase(path: string): Database {
     if (!columns.has('tv_mac')) db.exec("ALTER TABLE children ADD COLUMN tv_mac TEXT NOT NULL DEFAULT ''");
     if (!columns.has('tv_platform')) db.exec("ALTER TABLE children ADD COLUMN tv_platform TEXT NOT NULL DEFAULT 'wol'");
     if (!columns.has('tv_host')) db.exec("ALTER TABLE children ADD COLUMN tv_host TEXT NOT NULL DEFAULT ''");
+    if (!columns.has('username')) db.exec('ALTER TABLE children ADD COLUMN username TEXT');
+    if (!columns.has('password')) db.exec('ALTER TABLE children ADD COLUMN password TEXT');
+    if (!columns.has('account_revision')) db.exec('ALTER TABLE children ADD COLUMN account_revision INTEGER NOT NULL DEFAULT 0');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS children_username ON children(username) WHERE username IS NOT NULL');
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); db.close(); throw error; }
 

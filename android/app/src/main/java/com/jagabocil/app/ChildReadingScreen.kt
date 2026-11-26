@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
@@ -23,11 +25,11 @@ import kotlinx.coroutines.delay
 
 @Composable internal fun ChildHome(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
-    val surah = vm.quran.chapter(child.surahId)
+    val surah = vm.quran.chapter(vm.selectedSurahId ?: child.surahId)
     val ayahs = surah?.ayahs
     if (surah == null || ayahs == null) {
         Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.TopCenter) {
-            ReadingBanner(null, "Tugas belum tersedia", "Minta orang tua memeriksa aturan bacaanmu.", accent = Butter)
+            ReadingBanner(null, "Bacaan belum tersedia", "Coba muat ulang dari menu akun.", accent = Butter)
         }
         return
     }
@@ -35,16 +37,21 @@ import kotlinx.coroutines.delay
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.startRecording() else vm.message = "Izinkan mikrofon untuk merekam bacaanmu."
     }
-    var now by remember { mutableLongStateOf(vm.serverNow()) }
-    LaunchedEffect(Unit) { while (true) { now = vm.serverNow(); delay(1000) } }
-    val step = readingStep(vm.recording, vm.recordedFile != null, data.recitations, now)
+    var showSurahs by rememberSaveable { mutableStateOf(false) }
+    var expiryClock by remember { mutableLongStateOf(vm.serverNow()) }
+    LaunchedEffect(data.recitations) {
+        while (true) {
+            expiryClock = vm.serverNow()
+            val nextExpiry = data.recitations.firstOrNull { it.canUse(expiryClock) }?.expiresAt ?: break
+            delay((nextExpiry - expiryClock).coerceAtLeast(1))
+        }
+    }
+    val step = readingStep(vm.recording, vm.recordedFile != null, data.recitations, maxOf(expiryClock, vm.serverNow()))
     val last = data.recitations.firstOrNull()
-    val canSetUp = (data.tvSetupUntil ?: 0) > now
     val tvReady = when {
         child.awaitsTv -> false
         child.tvTransport == "infrared" -> vm.infrared.available
-        child.tvPlatform == "wol" -> true
-        else -> vm.tvRemote.paired(child)
+        else -> vm.tvPaired
     }
     fun start() {
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.startRecording()
@@ -62,27 +69,35 @@ import kotlinx.coroutines.delay
                         is ReadingStep.Approved -> ReadingBanner("Izin TV siap", "Bacaan disetujui", vm.quran.name(step.recitation.surahId), Mint, Icons.Outlined.Tv)
                         is ReadingStep.Waiting -> ReadingBanner(null, "Menunggu diperiksa", vm.quran.name(step.recitation.surahId), Butter, Icons.Outlined.Headphones)
                         ReadingStep.Preview -> ReadingBanner(null, "Periksa rekamanmu", "${surah.name} · ${vm.seconds} detik", Rose, Icons.Outlined.Headphones)
-                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Tugas ngaji", surah.name,
+                        ReadingStep.Read, ReadingStep.Recording -> ReadingBanner("Bacaan untuk izin TV", surah.name,
                             "${surah.verses} ayat · Rekam minimal ${child.minSeconds} detik", Sky)
                     }
                 }
-                if (!step.showsVerses || inlineControls) item { ReadingControls(vm, step, child, last, canSetUp, tvReady, ::start) }
+                if (step == ReadingStep.Read) item {
+                    TaskLink("Pilih surah", "Pilih bacaan dari Juz 30.", Icons.AutoMirrored.Outlined.MenuBook,
+                        Sky, enabled = !vm.busy) { showSurahs = true }
+                }
+                if (!step.showsVerses || inlineControls) item { ReadingControls(vm, step, child, last, tvReady, ::start) }
                 if (step.showsVerses) {
                     quranVerses(surah.id, ayahs)
                     item { QuranAttribution() }
                 }
             }
             if (step.showsVerses && !inlineControls) {
-                ReadingControls(vm, step, child, last, canSetUp, tvReady, ::start)
+                ReadingControls(vm, step, child, last, tvReady, ::start)
                 Spacer(Modifier.height(4.dp))
             }
         }
+    }
+    if (showSurahs) QuranTaskPicker(vm.quran.juz30, surah.id, { showSurahs = false }) {
+        vm.selectSurah(it)
+        showSurahs = false
     }
 }
 
 @Composable private fun ReadingControls(
     vm: AppViewModel, step: ReadingStep, child: Child, last: Recitation?,
-    canSetUp: Boolean, tvReady: Boolean, onRecord: () -> Unit,
+    tvReady: Boolean, onRecord: () -> Unit,
 ) {
     val color = when (step) {
         ReadingStep.Recording -> Rose
@@ -115,11 +130,10 @@ import kotlinx.coroutines.delay
                     val activePermit = step.recitation
                     activePermit.expiresAt?.let { Text("Izin berlaku sampai ${time(it)} untuk satu kali menyalakan TV.", color = Muted) }
                     if (tvReady && child.tvTransport == "infrared") Text("Arahkan ujung HP ke TV.", color = Muted)
-                    val setupHere = canSetUp || !child.awaitsTv && child.tvTransport == "wifi"
                     Button(onClick = {
-                        if (tvReady) vm.power(activePermit) else vm.screen = if (setupHere) "tv-setup" else "family"
+                        if (tvReady) vm.power(activePermit) else vm.openTvSetup()
                     }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (tvReady) "Nyalakan TV" else if (setupHere) "Hubungkan TV" else "Buka panduan TV")
+                        Text(if (tvReady) "Nyalakan TV" else "Pilih atau hubungkan TV")
                     }
                 }
                 is ReadingStep.Waiting -> {
@@ -135,8 +149,10 @@ import kotlinx.coroutines.delay
                     }
                 }
             }
-            if ((step == ReadingStep.Read || step is ReadingStep.Waiting) && (canSetUp || child.tvTransport == "wifi" && !tvReady)) {
-                TextButton(onClick = { vm.screen = "tv-setup" }, enabled = !vm.busy) { Text(if (canSetUp) "Siapkan TV" else "Hubungkan TV") }
+            if (step == ReadingStep.Read || step is ReadingStep.Waiting) {
+                TextButton(onClick = vm::openTvSetup, enabled = !vm.busy) {
+                    Text(if (child.awaitsTv) "Pilih TV" else "TV saya")
+                }
             }
         }
     }

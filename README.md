@@ -6,8 +6,8 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 
 ## Yang sudah tersedia
 
-- Daftar dan masuk dengan username dan kata sandi. Username 3–32 karakter, kata sandi minimal 4 karakter. Profil anak dihubungkan melalui kode enam angka, sekali pakai, kedaluwarsa 10 menit.
-- Semua 37 surah Juz 30 tersedia di **Keluarga → Aturan bacaan**. Layar tugas menampilkan teks Arab per ayat dengan perekam, pratinjau audio, dan unggah M4A.
+- Orang tua membuat akun anak dari menu **Keluarga**. Anak masuk dengan username dan kata sandinya sendiri. Username baru terdiri dari 3–32 karakter, dengan kata sandi minimal 4 karakter.
+- Anak memilih sendiri salah satu dari 37 surah Juz 30 sebelum merekam. Layar bacaan menampilkan teks Arab per ayat, perekam, dan pratinjau audio.
 - Menu **Al-Qur’an** dapat dibuka sebelum masuk. Juz 30 ikut di dalam APK. Untuk 77 surah lainnya, pilih surah dan tekan **Unduh surah**. Teks yang sudah diunduh tersimpan per HP dan dapat dibaca lagi tanpa internet.
 - **Manual:** salinan audio masuk ke akun orang tua. Orang tua mendengar, menyetujui, atau meminta ulang dari HP lain.
 - Notifikasi Android untuk rekaman baru dan hasil review. Aktifkan di **Keluarga** pada HP orang tua dan di **Panduan** pada HP anak. Aplikasi memeriksa saat dibuka dan memakai pekerjaan berkala saat di latar belakang. Android menjadwalkan pekerjaan tersebut dengan interval minimal 15 menit dan bisa menundanya.
@@ -15,7 +15,7 @@ Stack: aplikasi Android + API Node.js 24/Fastify, dengan **Neon PostgreSQL dan S
 - **AI opsional:** DeepSeek mencocokkan teks hasil transkripsi dengan surah tugas. Orang tua tetap mendengar rekaman dan memutuskan. Jika server memakai Gemini, bacaan yang dikenali lengkap dengan confidence dan coverage ≥95% bisa disetujui otomatis. Orang tua perlu menyetujui pengiriman audio ke penyedia yang aktif.
 - Izin server berlaku 1–60 menit setelah disetujui dan dikonsumsi atomik sekali saja. Mengganti aturan, mencabut perangkat, atau menghapus rekaman membatalkan izin yang belum dipakai.
 - Dua metode koneksi: **infrared** Samsung/LG 38 kHz atau **Wi-Fi lokal**. Pilihan platform Wi-Fi: Android TV/Google TV (Remote Service v2), Samsung Tizen (WSS), LG webOS (SSAP/WSS), dan Wake-on-LAN. Driver jaringan masih perlu pengujian pada TV fisik; lihat [matriks kompatibilitas](docs/tv-compatibility.md).
-- Riwayat, pemutaran audio privat, penghapusan oleh orang tua, pencabutan perangkat anak, serta pembaruan antrean setiap 10 detik.
+- Riwayat, pemutaran audio privat, penghapusan oleh orang tua, dan pencabutan sesi anak. Antrean orang tua dan status bacaan yang menunggu diperbarui di belakang layar saat tampilan terkait aktif.
 
 ## Batas kontrol TV
 
@@ -23,7 +23,7 @@ Aplikasi mengunci **tombol power di JagaBocil**. Tombol fisik TV, remote lain, a
 
 **Infrared:** perlu HP dengan IR blaster. Profil Samsung/LG merupakan kode umum dan harus diuji pada model TV yang dipakai. Power IR bersifat toggle: dapat menyalakan maupun mematikan TV.
 
-**Wi-Fi:** orang tua bisa memilih TV dari **Cari TV di Wi-Fi** atau mengisi platform dan IP lokal secara manual. Pairing dilakukan di HP anak yang menjadi remote. Android/Google TV memakai kode di layar, Samsung/LG memakai persetujuan registrasi TV. HP harus terhubung ke Wi-Fi pada subnet IPv4 privat yang sama dengan TV. Tidak membutuhkan IR blaster atau jembatan server lokal tambahan. Mode Wake-on-LAN menggunakan MAC jaringan TV.
+**Wi-Fi:** anak memilih TV dari **TV saya → Cari TV di Wi-Fi** atau mengisi platform dan IP lokal di **Opsi TV lainnya**. Pairing dilakukan di HP yang menjadi remote. Android/Google TV memakai kode di layar, Samsung/LG memakai persetujuan registrasi TV. HP dan TV memakai subnet IPv4 privat yang sama. Mode Wake-on-LAN menggunakan MAC jaringan TV.
 
 Menyalakan dari standby bergantung pada kemampuan dan pengaturan model TV. Isi MAC opsional untuk mencoba Wake-on-LAN ketika layanan remote TV yang sudah dipairing tidak dapat dihubungi. Tidak ada jaminan semua model/firmware dapat dibangunkan. LG SSAP `turnOnScreen` menyalakan layar saat layanan TV masih aktif; membangunkan TV dari standby penuh perlu wake jaringan yang didukung. Wi-Fi mengirim permintaan nyalakan; tidak otomatis mematikan TV setelah durasi tertentu. Izin yang sudah dikonsumsi tidak dipulihkan jika pengiriman selanjutnya gagal atau TV tidak merespons.
 
@@ -69,13 +69,13 @@ cd android
 
 APK debug: `android/app/build/outputs/apk/debug/app-debug.apk`. Minimum Android 8.0 (API 26). Build release membutuhkan signing key milikmu; key tidak disimpan dalam repo.
 
-1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`.
-2. Pilih **Orang tua → Daftar**, lalu buat profil anak. Bacaan awalnya Al-Ikhlas dengan pemeriksaan orang tua. Untuk memilih bacaan lain, buka **Ubah aturan**.
-3. Di HP anak, pilih **Aku anak → Pindai QR** dan arahkan kamera ke QR di HP orang tua. Jika perlu, pilih **Masukkan kode angka**. QR dan kode memakai izin sambung sekali pakai yang sama.
-4. Untuk TV Wi-Fi yang belum diatur, buka **Siapkan TV → Cari TV** untuk mencari perangkat yang menyala di Wi-Fi yang sama. Pilih TV, ikuti petunjuk di layar TV, lalu coba **Tes nyalakan TV** dan konfirmasi hasilnya. Satu tes tersedia selama 10 menit setelah HP anak terhubung dan membutuhkan backend yang mendukung alur ini. Untuk konfigurasi dari HP orang tua, pilih **Pilih TV dari HP ini**, atau buka **Ubah aturan → Pengaturan TV lanjutan** untuk infrared, IP manual, atau Wake-on-LAN. Di HP anak, **Panduan** menyediakan pengecekan sambungan.
-5. Di HP anak, pilih **Mulai rekam**, baca surah, lalu ketuk **Selesai merekam**. Dengarkan rekaman bila perlu, lalu pilih **Kirim bacaan**. Ketuk notifikasi di HP orang tua untuk membuka rekaman, atau buka antrean di **Beranda**. Dengarkan, lalu pilih **Setujui** atau **Minta ulang**. Setelah disetujui, HP anak menampilkan **Nyalakan TV** untuk satu kali pemakaian.
+1. Buka APK pada emulator atau HP. Aplikasi otomatis terhubung ke `https://jagabocil.onrender.com`. Fitur akun anak memerlukan versi API yang sesuai dan schema PostgreSQL versi 5.
+2. Masuk sebagai **Orang tua** dan buat akun anak. Untuk profil lama, buka **Keluarga → Siapkan login anak** agar profil dan riwayat tetap dipakai.
+3. Di HP anak, pilih **Aku anak** dan masukkan username serta kata sandi anak. Dari **Pilih surah**, pilih bacaan Juz 30. Rekam, dengarkan bila perlu, lalu pilih **Kirim bacaan**.
+4. Di HP orang tua, buka bacaan dari antrean **Beranda** atau notifikasi. Pilih **Setujui** atau **Minta ulang**.
+5. Di HP anak, pilih perangkat dari **TV saya → Cari TV di Wi-Fi**. Ikuti petunjuk di layar TV bila diminta. Anak juga bisa mengatur TV sebelum mengirim bacaan. Setelah rekaman disetujui, tombol **Nyalakan TV** menggunakan izin satu kali.
 
-Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua. Satu instalasi menyimpan satu sesi. Jika versi lama memakai server lain, masuk atau sambungkan kembali HP anak dengan akun pada server resmi. Distribusi Play Store belum tersedia.
+Akun yang sama bisa digunakan di dua HP untuk menguji antrean orang tua. Satu instalasi menyimpan satu sesi. Setelah login anak disiapkan atau diganti, masuk kembali di HP anak. Distribusi Play Store belum tersedia.
 
 Akun dari versi lama dapat memasukkan pengenal masuk yang sebelumnya mereka pakai ke kolom Username. Nama tampilan dan kata sandi akun lama tetap bisa digunakan.
 

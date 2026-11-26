@@ -381,3 +381,81 @@ test('a long Juz 30 assignment accepts the matching recording and old clients ca
   assert.equal(assigned.verses, 40);
   assert.equal(assigned.arabic.startsWith(quranText('1')!.ayahs[0]!), false);
 });
+
+test('parent can add credentials to an existing child and reset its login', async () => {
+  const other = (await request('POST', '/auth/login', '', { username: 'KeluargaLain', password: 'kata-sandi-kuat' })).json().token;
+  const profile = (await request('POST', '/children', parent, { name: 'Anak lama' })).json();
+  const path = `/children/${profile.child.id}/account`;
+  const oldToken = (await request('POST', '/pair', '', { code: profile.pairing.code })).json().token;
+  const newCredentials = { username: 'AnakLama', password: 'katabaharu' };
+  assert.equal((await request('PUT', path, other, newCredentials)).statusCode, 404);
+  const saved = await request('PUT', path, parent, newCredentials);
+  assert.equal(saved.statusCode, 200);
+  assert.equal(saved.json().child.id, profile.child.id);
+  assert.equal(saved.json().child.username, 'anaklama');
+  assert.equal(saved.json().child.password, undefined);
+  assert.equal((await request('GET', '/dashboard', oldToken)).statusCode, 401);
+  assert.equal((await request('POST', `/children/${profile.child.id}/pairing`, parent)).statusCode, 409);
+
+  const login = await request('POST', '/auth/child/login', '', { ...newCredentials, username: ' ANAKLAMA ' });
+  assert.equal(login.statusCode, 200);
+  assert.equal(login.json().role, 'child');
+  const token = login.json().token;
+  assert.equal((await request('GET', '/dashboard?quran=local', token)).json().children[0].id, profile.child.id);
+  assert.equal((await request('PUT', path, token, newCredentials)).statusCode, 403);
+  assert.equal((await request('PUT', path, parent, { ...newCredentials, password: 'resetbaru' })).statusCode, 200);
+  assert.equal((await request('GET', '/dashboard', token)).statusCode, 401);
+  assert.equal((await request('POST', '/auth/child/login', '', newCredentials)).statusCode, 401);
+  const reLogin = await request('POST', '/auth/child/login', '', { ...newCredentials, password: 'resetbaru' });
+  assert.equal(reLogin.statusCode, 200);
+  assert.equal((await request('GET', '/dashboard', reLogin.json().token)).json().children[0].id, profile.child.id);
+});
+
+test('child account chooses a TV and surah, then needs review for one power permit', async () => {
+  const other = (await request('POST', '/auth/login', '', { username: 'KeluargaLain', password: 'kata-sandi-kuat' })).json().token;
+  const credentials = { username: 'Nara', password: 'katabaru' };
+  const created = await request('POST', '/children/accounts', parent, { ...credentials, name: 'Nara' });
+  assert.equal(created.statusCode, 201);
+  const profile = created.json().child;
+  assert.equal(profile.surahId, '112');
+  assert.equal((await request('POST', '/children/accounts', other, { ...credentials, name: 'Nara lain', username: 'NARA' })).statusCode, 409);
+  const login = await request('POST', '/auth/child/login', '', credentials);
+  assert.equal(login.statusCode, 200);
+  const token = login.json().token;
+  const submit = (surahId: string, selfSelected: boolean) => {
+    const data = multipart(wav(16), surahId);
+    return app.inject({
+      method: 'POST', url: selfSelected ? '/recitations?selection=self' : '/recitations',
+      remoteAddress: '127.0.0.2', headers: { ...data.headers, authorization: `Bearer ${token}` }, payload: data.payload,
+    });
+  };
+  const tv = { tvBrand: 'none', tvTransport: 'wifi', tvPlatform: 'androidtv', tvHost: '192.168.1.24' };
+  assert.equal((await request('PUT', '/child/tv', parent, tv)).statusCode, 403);
+  assert.equal((await request('PUT', '/child/tv', token, { ...tv, tvHost: '8.8.8.8' })).statusCode, 400);
+  assert.equal((await request('POST', '/tv/setup', token, { platform: 'androidtv', host: tv.tvHost })).statusCode, 403);
+  const selectedTv = await request('PUT', '/child/tv', token, tv);
+  assert.equal(selectedTv.statusCode, 200);
+  assert.equal(selectedTv.json().permit, undefined);
+  assert.equal(selectedTv.json().child.tvHost, tv.tvHost);
+  const tvRevision = selectedTv.json().child.tvRevision;
+
+  assert.equal((await submit('114', false)).statusCode, 400);
+  assert.equal((await submit('77', true)).statusCode, 400);
+  const submitted = await submit('114', true);
+  assert.equal(submitted.statusCode, 201);
+  const recitation = submitted.json().recitation;
+  assert.equal(recitation.surahId, '114');
+  const authorize = (revision: number) => request('POST', '/tv/authorize', token,
+    { recitationId: recitation.id, tvTransport: tv.tvTransport, tvRevision: revision });
+  assert.equal((await authorize(tvRevision)).statusCode, 403);
+  const reviewPath = `/recitations/${recitation.id}/review`;
+  assert.equal((await request('POST', reviewPath, other, { decision: 'approve' })).statusCode, 404);
+  assert.equal((await request('POST', reviewPath, parent, { decision: 'approve' })).statusCode, 200);
+  const anotherTv = await request('PUT', '/child/tv', token, { ...tv, tvHost: '192.168.1.25' });
+  assert.equal(anotherTv.statusCode, 200);
+  assert.equal((await authorize(tvRevision)).statusCode, 409);
+  const permit = await authorize(anotherTv.json().child.tvRevision);
+  assert.equal(permit.statusCode, 200);
+  assert.equal(permit.json().tvHost, '192.168.1.25');
+  assert.equal((await authorize(anotherTv.json().child.tvRevision)).statusCode, 403);
+});

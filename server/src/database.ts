@@ -28,7 +28,7 @@ export function postgresSql(sql: string, schema: string) {
   return output;
 }
 
-const schemaVersion = 4;
+const schemaVersion = 5;
 
 export const migration = (schema: string) => {
   const s = schemaName(schema);
@@ -80,6 +80,15 @@ export const migration = (schema: string) => {
         amount INTEGER NOT NULL,created_at BIGINT NOT NULL,status TEXT NOT NULL,checkout_url TEXT,paid_at BIGINT);
       CREATE UNIQUE INDEX IF NOT EXISTS billing_order_open ON ${s}.billing_orders(parent_id) WHERE status='open';
       CREATE INDEX IF NOT EXISTS billing_order_paid ON ${s}.billing_orders(parent_id,paid_at) WHERE status='paid';
+      INSERT INTO ${s}.schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING;
+    END;
+    $migration$`,
+    `DO $migration$
+    BEGIN
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS username TEXT;
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS password TEXT;
+      ALTER TABLE ${s}.children ADD COLUMN IF NOT EXISTS account_revision INTEGER NOT NULL DEFAULT 0;
+      CREATE UNIQUE INDEX IF NOT EXISTS children_username ON ${s}.children(username) WHERE username IS NOT NULL;
       INSERT INTO ${s}.schema_migrations(version) VALUES(${schemaVersion}) ON CONFLICT DO NOTHING;
     END;
     $migration$`,

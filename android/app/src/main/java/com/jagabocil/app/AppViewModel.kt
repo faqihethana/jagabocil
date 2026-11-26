@@ -11,11 +11,13 @@ import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.io.File
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import okhttp3.MediaType.Companion.toMediaType
@@ -38,6 +40,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var player: MediaPlayer? = null
     private var playbackFile: File? = null
     private var ticker: Job? = null
+    private var refreshJob: Job? = null
+    private var lastLoadedAt = 0L
     private var recordedSurahId: String? = null
     private var clockOffset = 0L
     var dashboard by mutableStateOf<Dashboard?>(null); private set
@@ -47,14 +51,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var seconds by mutableIntStateOf(0); private set
     var recordedFile by mutableStateOf<File?>(null); private set
     var playing by mutableStateOf<String?>(null); private set
-    var pairing by mutableStateOf<PairCode?>(null)
-        private set
-    var pairingChild by mutableStateOf<Child?>(null)
-        private set
-    var setupTarget by mutableStateOf<Child?>(null)
-        private set
-    var tvTestSent by mutableStateOf(false)
-        private set
+    var selectedSurahId by mutableStateOf<String?>(null); private set
+    var tvPaired by mutableStateOf(false); private set
+    private var tvReturnScreen = "home"
     private var reviewFromNotification: String? = null
     var screen by mutableStateOf("home")
     val loggedIn get() = api.token.isNotEmpty()
@@ -69,17 +68,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
     private fun action(onError: ((String) -> Unit)? = null, work: suspend () -> Unit) {
         if (busy) return
+        refreshJob?.cancel()
+        refreshJob = null
         busy = true
         viewModelScope.launch {
             try { work() }
             catch (e: Exception) {
                 if (e is CancellationException) throw e
                 if (e is ApiError && e.status == 401 && loggedIn) clearSession()
-                val error = when (e) {
-                    is ApiError -> e.message ?: "Ada kendala. Coba lagi, ya."
-                    is java.io.IOException -> "JagaBocil belum bisa terhubung. Periksa koneksi internet lalu coba lagi."
-                    else -> e.message ?: "Ada kendala. Coba lagi, ya."
-                }
+                val error = if (e is java.io.IOException) "JagaBocil belum bisa terhubung. Periksa koneksi internet lalu coba lagi."
+                    else e.message ?: "Ada kendala. Coba lagi, ya."
                 if (onError == null) message = error else onError(error)
             } finally { busy = false }
         }
@@ -89,11 +87,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         api.token = ""
         dashboard = null
         recoveryCode = null
-        dismissPairing()
-        setupTarget = null
-        tvTestSent = false
+        selectedSurahId = null
+        tvPaired = false
+        tvReturnScreen = "home"
+        lastLoadedAt = 0L
         reviewFromNotification = null
         screen = "home"
+        discardRecording()
         tvRemote.clear()
         tvPairCodeNeeded = false
         notifications.clearSession()
@@ -101,26 +101,51 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun load() {
         val token = api.token
         val result = api.dashboard()
+        coroutineContext.ensureActive()
         clockOffset = result.serverTime - System.currentTimeMillis()
-        dashboard = result
-        reviewFromNotification?.let { openReview(it) }
+        lastLoadedAt = SystemClock.elapsedRealtime()
+        val previous = dashboard
+        if (previous == null || previous != result.copy(serverTime = previous.serverTime)) dashboard = result
+        if (result.role == "child") tvPaired = result.children.firstOrNull()?.let(tvRemote::paired) == true
+        reviewFromNotification?.let { id ->
+            reviewFromNotification = null
+            if (result.role == "parent") screen = "review:$id"
+        }
         if (notificationsEnabled) withContext(Dispatchers.IO) { notifications.observe(result, token) }
     }
     fun refresh() { if (foreground && loggedIn) action { load() } }
-    fun authenticate(username: String, password: String, code: String, child: Boolean, register: Boolean) = action {
-        val body = if (child) api.body("code" to code.trim()) else api.body("username" to username.trim(), "password" to password)
-        val auth = api.json.decodeFromString<Auth>(api.request(if (child) "/pair" else if (register) "/auth/register" else "/auth/login", "POST", body, authenticated = false))
+    private fun refreshQuietly() {
+        if (!foreground || !loggedIn || busy || recording || recordedFile != null || refreshJob?.isActive == true) return
+        refreshJob = viewModelScope.launch {
+            try {
+                load()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (error is ApiError && error.status == 401) {
+                    clearSession()
+                    message = error.message
+                }
+            }
+        }
+    }
+    fun pollUpdates() {
+        val data = dashboard ?: return
+        if (SystemClock.elapsedRealtime() - lastLoadedAt < 15_000) return
+        val readingScreen = screen == "home" || screen == "history"
+        if (data.role == "parent" && (readingScreen || screen.startsWith("review:")) ||
+            data.role == "child" && readingScreen && data.recitations.any { it.status == "pending" }) {
+            refreshQuietly()
+        }
+    }
+    fun authenticate(username: String, password: String, child: Boolean, register: Boolean) = action {
+        val path = if (child) "/auth/child/login" else if (register) "/auth/register" else "/auth/login"
+        val auth = api.json.decodeFromString<Auth>(api.request(path, "POST",
+            api.body("username" to username.trim(), "password" to password), authenticated = false))
         api.token = auth.token
         store.save(auth.token)
         screen = "home"
         load()
-        if (child) {
-            val data = dashboard
-            val profile = data?.children?.firstOrNull()
-            if ((data?.tvSetupUntil ?: 0) > serverNow() || profile?.tvTransport == "wifi" && !tvRemote.paired(profile)) {
-                screen = "tv-setup"
-            }
-        }
         notifications.schedule()
     }
     fun setNotifications(enabled: Boolean) {
@@ -134,7 +159,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             message = "Izinkan notifikasi JagaBocil di pengaturan Android."
             return
         }
-        notifications.enable(data, api.token)
+        notifications.enable(data.copy(serverTime = serverNow()), api.token)
         notificationsEnabled = true
     }
     fun createRecoveryCode(password: String, onError: (String) -> Unit, onComplete: () -> Unit) = action(onError) {
@@ -178,19 +203,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { api.request("/auth/logout", "POST") }
         clearSession()
     }
-    fun addChild(name: String, onCreated: () -> Unit) = action {
-        val result = api.json.decodeFromString<CreatedChild>(api.request("/children", "POST", api.body("name" to name)))
-        pairingChild = result.child
-        pairing = result.pairing
-        dashboard = dashboard?.let { it.copy(children = it.children + result.child) }
+    fun addChild(name: String, username: String, password: String, onCreated: () -> Unit) = action {
+        val child = api.json.decodeFromString<UpdatedChild>(api.request("/children/accounts", "POST",
+            api.body("name" to name, "username" to username, "password" to password))).child
+        dashboard = dashboard?.let { it.copy(children = (it.children + child).sortedBy { profile -> profile.name }) }
         onCreated()
-        load()
+        message = "Akun ${child.name} siap. Masuk di HP anak dengan username dan kata sandinya."
     }
-    fun pairChild(child: Child) = action {
-        pairing = api.json.decodeFromString<PairResponse>(api.request("/children/${child.id}/pairing", "POST")).pairing
-        pairingChild = child
+    fun saveChildAccount(child: Child, username: String, password: String, onError: (String) -> Unit, onSaved: () -> Unit) = action(onError) {
+        val updated = api.json.decodeFromString<UpdatedChild>(api.request("/children/${child.id}/account", "PUT",
+            api.body("username" to username, "password" to password))).child
+        dashboard = dashboard?.let { data -> data.copy(children = data.children.map { if (it.id == updated.id) updated else it }) }
+        onSaved()
+        message = "Login ${updated.name} sudah disimpan."
     }
-    fun dismissPairing() { pairing = null; pairingChild = null }
     fun policy(child: Child, p: Policy) = action {
         api.request("/children/${child.id}/policy", "PUT", api.json.encodeToString(p).toRequestBody("application/json".toMediaType()))
         load(); message = "Aturan disimpan. Anak perlu merekam ngaji baru."; screen = "family"
@@ -208,7 +234,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         reviewFromNotification = null
         if (data.role != "parent") return
         screen = "review:$id"
-        refresh()
+        if (data.recitations.none { it.id == id }) refreshQuietly()
     }
     fun deleteRecording(id: String) = action {
         stopPlayback()
@@ -216,8 +242,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         load()
         if (screen == "review:$id") screen = "home"
     }
+    fun selectSurah(id: String) {
+        if (!recording && recordedFile == null && quran.chapter(id)?.ayahs != null) selectedSurahId = id
+    }
     fun startRecording() {
-        val chapter = dashboard?.children?.firstOrNull()?.surahId?.let(quran::chapter) ?: return
+        if (busy || recording) return
+        val id = selectedSurahId ?: dashboard?.children?.firstOrNull()?.surahId ?: return
+        val chapter = quran.chapter(id) ?: return
         val maxSeconds = chapter.maxRecordingSeconds
         try {
             stopPlayback()
@@ -242,61 +273,45 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun foregrounded() {
         val wasActive = foreground
         foreground = true
-        if (!wasActive) refresh()
+        if (!wasActive && SystemClock.elapsedRealtime() - lastLoadedAt >= 15_000) {
+            if (dashboard == null) refresh() else refreshQuietly()
+        }
     }
-    fun backgrounded() { foreground = false; cancelTvPair(); if (recording) { discardRecording(); message = "Rekaman dihentikan saat aplikasi ditutup. Silakan rekam ulang." }; stopPlayback() }
+    fun backgrounded() { foreground = false; refreshJob?.cancel(); cancelTvPair(); if (recording) { discardRecording(); message = "Rekaman dihentikan saat aplikasi ditutup. Silakan rekam ulang." }; stopPlayback() }
     fun cancelTvPair() { tvRemote.cancelPair(); tvPairCodeNeeded = false }
     internal suspend fun discoverTvs() = tvDiscovery.find()
 
-    internal fun chooseSetupTv(child: Child, tv: DiscoveredTv) {
-        if (busy) return
-        val target = child.copy(tvTransport = "wifi", tvPlatform = tv.platform.id, tvHost = tv.host, tvMac = "")
-        setupTarget = target
-        if (!tvRemote.paired(target)) pairTv(target)
+    fun openTvSetup() {
+        if (busy || recording || recordedFile != null) return
+        tvReturnScreen = screen
+        screen = "tv-setup"
     }
 
     fun leaveTvSetup() {
         cancelTvPair()
-        setupTarget = null
-        tvTestSent = false
-        screen = "home"
+        screen = tvReturnScreen
     }
 
-    fun testSetupTv() = action {
-        val target = setupTarget ?: return@action
-        val command = try {
-            tvRemote.prepare(target)
-        } catch (error: IllegalStateException) {
-            throw IllegalStateException("TV belum merespons. Pastikan HP dan TV memakai Wi-Fi yang sama. Coba lagi saat koneksi Wi-Fi TV masih aktif.", error)
-        }
-        try {
-            check(foreground) { "Buka JagaBocil untuk mengetes TV." }
-            val result = api.json.decodeFromString<TvSetupResult>(api.request("/tv/setup", "POST", api.body("platform" to target.tvPlatform, "host" to target.tvHost)))
-            dashboard = dashboard?.copy(children = listOf(result.child), tvSetupUntil = null)
-            setupTarget = null
-            val permit = result.permit
-            check(permit.authorized && permit.expiresAt > serverNow() && permit.tvTransport == "wifi" && permit.tvPlatform == target.tvPlatform && permit.tvHost == target.tvHost) { "Izin tes TV tidak berlaku. Coba cek TV dari Panduan." }
-            check(foreground) { "Tes berhenti saat aplikasi ditutup. Cek TV dari Panduan." }
-            try { command.send() }
-            catch (error: java.io.IOException) { throw IllegalStateException("Sinyal tes gagal dikirim. Cek TV dari Panduan.", error) }
-            tvTestSent = true
-        } finally { withContext(Dispatchers.IO) { runCatching { command.close() } } }
+    internal fun saveTv(settings: TvSettings, connect: Boolean = false) = action {
+        cancelTvPair()
+        val child = api.json.decodeFromString<UpdatedChild>(api.request("/child/tv", "PUT",
+            api.json.encodeToString(settings).toRequestBody("application/json".toMediaType()))).child
+        dashboard = dashboard?.copy(children = listOf(child))
+        tvPaired = tvRemote.paired(child)
+        if (connect && foreground && !tvPaired) connectTv(child)
+        else message = "Pilihan TV disimpan."
     }
 
-    internal fun chooseFamilyTv(child: Child, tv: DiscoveredTv) = policy(child, Policy(
-        child.mode, child.surahId, child.minSeconds, child.unlockMinutes, child.tvBrand, child.aiConsent,
-        "wifi", "", tv.platform.id, tv.host,
-    ))
-
-    fun pairTv(c: Child) = action {
+    fun pairTv(c: Child) = action { connectTv(c) }
+    private suspend fun connectTv(c: Child) {
         message = "Nyalakan TV dan setujui JagaBocil pada layar TV jika diminta."
         val paired = try { tvRemote.pair(c) } catch (error: java.io.IOException) { throw IllegalStateException("TV belum bisa dihubungi. Nyalakan TV, pastikan HP dan TV memakai Wi-Fi yang sama, lalu coba lagi.", error) }
-        if (!foreground) { cancelTvPair(); return@action }
+        if (!foreground) { cancelTvPair(); return }
         tvPairCodeNeeded = !paired
-        if (paired) { load(); message = "TV terhubung ke HP ini." }
+        if (paired) { tvPaired = true; message = "TV terhubung ke HP ini." }
     }
     fun finishTvPair(code: String) = action {
-        try { tvRemote.finishPair(code); load(); message = "Android TV terhubung." }
+        try { tvRemote.finishPair(code); tvPaired = true; message = "Android TV terhubung." }
         finally { tvPairCodeNeeded = false }
     }
     fun checkTv(c: Child) = action {
@@ -313,10 +328,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun upload() = action {
-        val child = dashboard?.children?.firstOrNull() ?: return@action
         val file = recordedFile ?: return@action
         val surahId = recordedSurahId ?: return@action
-        require(surahId == child.surahId) { "Surah tugas berubah. Hapus rekaman ini dan mulai lagi." }
         val result = api.json.decodeFromString<UploadedRecitation>(api.upload(file, surahId)).recitation
         discardRecording()
         dashboard = dashboard?.let { it.copy(recitations = listOf(result) + it.recitations.filter { rec -> rec.id != result.id }) }
@@ -356,7 +369,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         try {
             check(foreground) { "Permintaan dibatalkan karena aplikasi ditutup." }
             if (command == null) infrared.check(c.tvBrand)
-            val result = api.json.decodeFromString<Permit>(api.request("/tv/authorize", "POST", api.body("recitationId" to rec.id, "tvTransport" to c.tvTransport)))
+            val result = api.json.decodeFromString<Permit>(api.request("/tv/authorize", "POST",
+                api.json.encodeToString(PowerRequest(rec.id, c.tvTransport, c.tvRevision)).toRequestBody("application/json".toMediaType())))
             require(result.authorized && result.expiresAt > serverNow()) { "Izin kedaluwarsa. Minta persetujuan baru." }
             check(foreground) { "Permintaan dibatalkan saat aplikasi ditutup. Izin yang sudah digunakan tidak dikembalikan." }
             require(result.tvTransport == c.tvTransport) { "Metode koneksi TV berubah. Muat ulang pengaturan." }

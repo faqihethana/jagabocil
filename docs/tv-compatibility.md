@@ -1,6 +1,6 @@
 # Infrared dan Wi-Fi TV
 
-JagaBocil 0.2 menyediakan dua pilihan koneksi pada aturan anak. Orang tua menentukan metode dan target TV; anak tetap membutuhkan rekaman yang disetujui untuk satu kali permintaan power. Pairing jaringan tidak memberikan izin power.
+JagaBocil menyediakan Wi-Fi dan infrared di **TV saya**. Anak memilih TV. Setelah bacaan disetujui, anak mendapat satu kali izin menggunakan tombol power di aplikasi.
 
 Driver berikut sudah diimplementasikan dan memiliki tes format protokol/akses. **Kompatibilitas pada perangkat fisik belum diverifikasi.** Pilihan platform mencakup keluarga sistem TV, bukan jaminan seluruh model, merek, tahun, atau firmware.
 
@@ -10,19 +10,19 @@ Driver berikut sudah diimplementasikan dan memiliki tes format protokol/akses. *
 | Android TV / Google TV | Remote Service v2; TLS 6466, pairing TLS 6467 | Masukkan enam karakter heksadesimal yang muncul pada layar TV | `KEYCODE_WAKEUP` saat layanan masih tersedia; Wake-on-LAN opsional jika layanan tidak terjangkau. |
 | Samsung Tizen | WebSocket TLS 8002, API remote v2 | Setujui akses remote pada layar TV | `KEY_POWERON`, jika model mendukungnya; Wake-on-LAN opsional saat layanan tidak terjangkau. |
 | LG webOS | SSAP melalui WebSocket TLS 3001 | Setujui registrasi remote pada layar TV | `turnOnScreen` saat layanan masih hidup; bangun dari standby penuh membutuhkan Wake-on-LAN jika didukung. |
-| Wake-on-LAN saja | UDP magic packet ke directed broadcast subnet Wi-Fi, port 9 | Tidak ada; orang tua mengisi MAC | Hanya bangun dari standby pada TV yang mendukung wake melalui jaringan. Tidak mematikan atau membaca status TV. |
+| Wake-on-LAN saja | UDP magic packet ke directed broadcast subnet Wi-Fi, port 9 | Isi MAC di **Opsi TV lainnya** | Hanya bangun dari standby pada TV yang mendukung wake melalui jaringan. |
 
 ## Menyiapkan Wi-Fi
 
 1. Hubungkan HP anak ke Wi-Fi rumah. TV harus berada pada subnet IPv4 yang sama; TV dengan kabel LAN pada router yang sama juga dapat bekerja jika router mengizinkan akses/broadcast antarperangkat.
-2. Pada akun orang tua, buka **Keluarga → aturan anak → Sambungkan TV lewat → Wi-Fi yang sama**.
+2. Pada akun anak, buka **Panduan → TV saya**. Saat bacaan belum direkam, layar **Beranda** juga menyediakan pintasan ke pilihan TV.
 3. Tekan **Cari TV di Wi-Fi** saat TV menyala. Pilih perangkat untuk mengisi platform dan IP lokal. Pencarian membaca iklan mDNS Android/Google TV serta iklan SSDP Samsung dan LG. Pilih platform dan isi IP secara manual jika TV tidak muncul. Mode **Wake-on-LAN saja** memakai MAC yang dimasukkan manual.
 4. Isi IPv4 lokal TV (misalnya `192.168.1.20`) untuk tiga driver remote. Cari alamat tersebut pada pengaturan jaringan TV. Reservasi DHCP pada router membantu menjaga IP tetap sama.
 5. Isi MAC dari antarmuka jaringan TV yang sedang dipakai bila ingin mencoba wake jaringan. Untuk TV tersambung lewat Wi-Fi, gunakan MAC Wi-Fi, bukan MAC Ethernet. Mode Wake-on-LAN saja mewajibkan MAC.
-6. Simpan aturan. Izin lama dibatalkan. Pada **HP anak**, nyalakan TV memakai remote fisik lalu tekan **Hubungkan TV**. Untuk Google TV masukkan kode di layar; untuk Samsung/LG setujui permintaan akses.
+6. Nyalakan TV memakai remote fisik dan ikuti petunjuk **Hubungkan TV** di HP anak. Untuk Google TV, masukkan kode di layar. Untuk Samsung/LG, setujui permintaan akses.
 7. Rekam ngaji, tunggu persetujuan, lalu gunakan tombol power. Backend untuk ngaji tetap harus dapat diakses; perintah TV dikirim langsung dari HP ke TV melalui jaringan lokal.
 
-Di kartu remote HP anak, tekan **Cek koneksi TV** saat TV menyala untuk mencoba sesi Wi-Fi yang sudah dipairing. **Cek jaringan TV** memvalidasi Wi-Fi IPv4 dan MAC untuk Wake-on-LAN. **Cek infrared** memeriksa dukungan IR 38 kHz pada HP. Izin power tetap tersedia setelah pengecekan. Uji dengan tombol power untuk memastikan TV bisa menyala dari standby.
+Di **TV saya**, tekan **Cek sambungan** saat TV menyala. Aplikasi mengecek sesi remote yang sudah dipairing, Wi-Fi dan MAC untuk Wake-on-LAN, atau dukungan IR 38 kHz sesuai pilihan. Izin power tetap tersedia setelah pengecekan.
 
 Nama pengaturan wake bervariasi: Wake-on-LAN, Wake on Wireless LAN, Mobile TV On, IP Remote, atau opsi menyalakan lewat perangkat seluler. Dukungan saat TV standby berbeda dari dukungan saat TV menyala. Aplikasi tidak dapat mengaktifkan kemampuan wake yang tidak dimiliki TV.
 
@@ -38,7 +38,7 @@ Nama pengaturan wake bervariasi: Wake-on-LAN, Wake on Wireless LAN, Mobile TV On
 
 ## Akses dan identitas
 
-Target ditentukan orang tua dan diteruskan melalui izin server; request anak tidak dapat mengganti target. Alamat remote dibatasi IPv4 privat literal pada subnet Wi-Fi HP. Port dan protokol ditentukan driver. Tidak ada akses jaringan TV dari backend cloud.
+Server menyimpan pilihan TV pada profil anak dan memasukkannya ke izin power. Aplikasi memeriksa bahwa target masih sesuai dengan izin tersebut. Alamat remote dibatasi IPv4 privat literal pada subnet Wi-Fi HP. Port dan protokol ditentukan driver.
 
 Token Samsung, client key LG, dan pin identitas TV disimpan terenkripsi dengan Android Keystore di HP. Identitas pertama didaftarkan melalui pairing lokal (trust on first use), lalu public key sertifikat diperiksa pada koneksi berikutnya. Android TV menggunakan sertifikat klien dari Android Keystore dan challenge kode di layar. Tidak ada pematian pemeriksaan TLS secara global untuk API aplikasi.
 

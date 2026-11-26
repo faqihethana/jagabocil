@@ -61,7 +61,7 @@ class Api(var token: String = "") {
             it.body?.byteStream()?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
         }
     }
-    suspend fun upload(file: File, surahId: String) = request("/recitations", "POST", MultipartBody.Builder().setType(MultipartBody.FORM)
+    suspend fun upload(file: File, surahId: String) = request("/recitations?selection=self", "POST", MultipartBody.Builder().setType(MultipartBody.FORM)
         .addFormDataPart("surahId", surahId)
         .addFormDataPart("audio", "ngaji.m4a", file.asRequestBody("audio/mp4".toMediaType())).build())
 }

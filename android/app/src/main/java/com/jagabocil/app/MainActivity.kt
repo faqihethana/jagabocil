@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -36,7 +35,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,13 +43,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private val UsernamePattern = Regex("[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}")
+internal val UsernamePattern = Regex("[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}")
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
 
@@ -107,7 +103,10 @@ class MainActivity : ComponentActivity() {
         }
     }
     LaunchedEffect(vm.dashboard?.role) {
-        while (vm.dashboard != null) { delay(10_000); if (!vm.recording && vm.recordedFile == null) vm.refresh() }
+        while (vm.dashboard != null) {
+            delay(20_000)
+            vm.pollUpdates()
+        }
     }
     Scaffold(containerColor = Cream, snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
@@ -175,31 +174,6 @@ class MainActivity : ComponentActivity() {
             dismissButton = { TextButton(onClick = vm::cancelTvPair) { Text("Batal") } })
     }
     vm.recoveryCode?.let { RecoveryCodeDialog(it, vm::dismissRecoveryCode) }
-    vm.pairing?.let { code ->
-        val child = vm.pairingChild
-        var now by remember(code) { mutableLongStateOf(vm.serverNow()) }
-        LaunchedEffect(code) { while (now < code.expiresAt) { delay(1000); now = vm.serverNow() } }
-        val expired = now >= code.expiresAt
-        AlertDialog(onDismissRequest = vm::dismissPairing,
-            title = { Text("Hubungkan HP anak") }, text = {
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (expired) Text("Kode sudah kedaluwarsa. Buat kode baru untuk menyambungkan HP anak.")
-                    else {
-                        Text("Di HP anak, pilih Aku anak → Pindai QR.")
-                        PairingQr(code.code, Modifier.size(160.dp))
-                        Text("Pilihan lain, masukkan kode ini di HP anak.", textAlign = TextAlign.Center)
-                        Text(code.code.chunked(3).joinToString(" "), fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Forest)
-                        Text("Kode berlaku 10 menit dan hanya sekali pakai.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                        if (child?.awaitsTv == true) Text("Setelah HP tersambung, dampingi anak saat menyiapkan TV.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                    }
-                }
-            }, confirmButton = {
-                if (expired && child != null) TextButton(onClick = { vm.pairChild(child) }, enabled = !vm.busy) { Text("Buat kode baru") }
-                else TextButton(onClick = vm::dismissPairing) { Text("Selesai") }
-            }, dismissButton = {
-                if (expired && child != null) TextButton(onClick = vm::dismissPairing) { Text("Tutup") }
-            })
-    }
 }
 
 @Composable private fun Brand() {
@@ -215,28 +189,14 @@ class MainActivity : ComponentActivity() {
     var role by rememberSaveable { mutableStateOf<String?>(null) }
     val child = role == "child"
     var register by rememberSaveable { mutableStateOf(false) }
-    var enterCode by rememberSaveable { mutableStateOf(false) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var code by remember { mutableStateOf("") }
     var recovering by remember { mutableStateOf(false) }
-    val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val scanned = result.contents ?: return@rememberLauncherForActivityResult
-        val pairing = readPairingQr(scanned)
-        if (pairing == null) vm.message = "QR ini tidak cocok. Pindai QR dari akun orang tua di JagaBocil."
-        else vm.authenticate("", "", pairing, child = true, register = false)
-    }
-    val canSubmit = when {
-        child -> code.length == 6
-        register -> UsernamePattern.matches(username.trim()) && password.length in 4..128
-        else -> username.isNotBlank() && password.isNotEmpty()
-    }
+    val canSubmit = if (register) UsernamePattern.matches(username.trim()) && password.length in 4..128
+        else username.isNotBlank() && password.isNotEmpty()
     fun back() {
-        when {
-            enterCode -> { enterCode = false; code = "" }
-            register -> { register = false; password = "" }
-            else -> { role = null; password = ""; code = "" }
-        }
+        password = ""
+        if (register) register = false else { role = null; username = "" }
     }
     BackHandler(enabled = role != null && !recovering) { if (!vm.busy) back() }
     val formScroll = key(role) { rememberScrollState() }
@@ -272,43 +232,26 @@ class MainActivity : ComponentActivity() {
                 }
                 Column(Modifier.padding(top = extraSpace * 0.23f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     TaskLink("Orang tua", "Atur tugas dan periksa bacaan.", Icons.Outlined.People, Mint) { role = "parent" }
-                    TaskLink("Aku anak", "Hubungkan HP dan mulai ngaji.", Icons.Outlined.Mic, Sky) { role = "child" }
+                    TaskLink("Aku anak", "Masuk dan pilih bacaanmu.", Icons.Outlined.Mic, Sky) { role = "child" }
                 }
             } else {
                 ReadingBanner(
                     null,
-                    if (child) "Hubungkan HP anak" else if (register) "Buat akun orang tua" else "Masuk sebagai orang tua",
-                    if (child) "Gunakan QR atau kode dari HP orang tua." else "Kelola bacaan dan izin TV keluarga.",
+                    if (child) "Masuk sebagai anak" else if (register) "Buat akun orang tua" else "Masuk sebagai orang tua",
+                    if (child) "Pakai akun anak yang dibuat orang tua." else "Kelola bacaan dan izin TV keluarga.",
                     accent = if (child) Sky else Mint,
-                    icon = if (child) Icons.Outlined.QrCodeScanner else Icons.Outlined.People,
+                    icon = if (child) Icons.Outlined.Mic else Icons.Outlined.People,
                 )
                 Surface(color = Color.White, shape = RoundedCornerShape(24.dp)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (child) {
-                            if (!enterCode) {
-                                Button(onClick = {
-                                    scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                        .setPrompt("Arahkan kamera ke QR JagaBocil dari HP orang tua").setBeepEnabled(false).setOrientationLocked(false))
-                                }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                                    Icon(Icons.Outlined.QrCodeScanner, null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Pindai QR")
-                                }
-                            } else {
-                                Field("6 angka dari orang tua", code, { code = it.filter { digit -> digit in '0'..'9' }.take(6) }, KeyboardType.Number)
-                            }
-                        } else {
-                            Field("Username", username, { username = it }, KeyboardType.Ascii)
-                            if (register) Text("3–32 karakter. Mulai dengan huruf atau angka. Boleh memakai titik, garis bawah, dan tanda hubung.", color = Muted, fontSize = 12.sp)
-                            OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text(if (register) "Kata sandi (min. 4 karakter)" else "Kata sandi") }, visualTransformation = PasswordVisualTransformation(), singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp))
+                        Field("Username", username, { username = it.take(if (register) 32 else 254) }, KeyboardType.Ascii)
+                        if (register) Text("3–32 karakter. Mulai dengan huruf atau angka. Boleh memakai titik, garis bawah, dan tanda hubung.", color = Muted, fontSize = 12.sp)
+                        PasswordField(if (register) "Kata sandi (min. 4 karakter)" else "Kata sandi", password) { password = it.take(128) }
+                        Button(onClick = { vm.authenticate(username, password, child, register) }, enabled = !vm.busy && canSubmit, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                            Text(if (register) "Buat akun" else "Masuk", fontWeight = FontWeight.SemiBold)
                         }
-                        if (!child || enterCode) {
-                            Button(onClick = { vm.authenticate(username, password, code, child, register) }, enabled = !vm.busy && canSubmit, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                                Text(if (child) "Sambungkan HP" else if (register) "Buat akun" else "Masuk", fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-                        if (child) TextButton(onClick = { enterCode = !enterCode }, enabled = !vm.busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (enterCode) "Kembali ke pindai QR" else "Masukkan kode angka") }
+                        if (child) Text("Lupa kata sandi? Minta orang tua mengubahnya di menu Keluarga.",
+                            color = Muted, style = MaterialTheme.typography.bodySmall)
                         if (!child) TextButton(onClick = { register = !register; password = "" }, enabled = !vm.busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (register) "Sudah punya akun? Masuk" else "Belum punya akun? Daftar") }
                         if (!child && !register) TextButton(onClick = { recovering = true }, enabled = !vm.busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Lupa kata sandi?") }
                     }
@@ -350,7 +293,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun ParentHome(vm: AppViewModel, data: Dashboard) {
     val pending = data.recitations.filter { it.status == "pending" }
     if (data.children.isEmpty()) {
-        ReadingBanner(null, "Mulai dari profil anak", "Buat profil untuk menghubungkan HP anak dan mengatur tugas ngaji.",
+        ReadingBanner(null, "Buat akun anak", "Anak memakai akun ini untuk memilih bacaan dan TV.",
             accent = Peach, illustrated = true)
         AddChild(vm)
         return
@@ -451,19 +394,18 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Family(vm: AppViewModel, data: Dashboard) {
     var adding by rememberSaveable { mutableStateOf(false) }
-    ReadingBanner(null, "Profil anak", "Atur tugas bacaan dan hubungkan HP anak.", Mint, Icons.Outlined.People)
+    ReadingBanner(null, "Akun anak", "Kelola login anak dan aturan pemeriksaan bacaan.", Mint, Icons.Outlined.People)
     data.children.forEach { child -> key(child.id) { ChildCard(vm, child) } }
     if (adding || data.children.isEmpty()) AddChild(vm) { adding = false }
-    else OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("Tambah profil anak") }
+    else OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("Tambah akun anak") }
     SectionTitle("Pengaturan akun")
     NotificationSetting(vm, parent = true)
     RecoverySetting(vm, data.recoveryConfigured)
     if (BuildConfig.DEBUG) data.billing?.let { BillingSetting(vm, it) }
-    Text("Kode penghubung hanya untuk HP anak. Jangan bagikan kata sandi akun orang tua.", fontSize = 12.sp, color = Muted)
 }
 
 @Composable private fun ChildCard(vm: AppViewModel, child: Child) {
-    var showDiscovery by remember(child.id) { mutableStateOf(false) }
+    var editingAccount by remember(child.id) { mutableStateOf(false) }
     Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -471,28 +413,39 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(child.name, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    Text("${vm.quran.name(child.surahId)} · ${if (child.mode == "ai") "Verifikasi AI" else "Diperiksa orang tua"}", color = Muted, fontSize = 12.sp)
+                    Text(child.username?.let { "@$it" } ?: "Login belum disiapkan", color = Muted, fontSize = 12.sp)
                 }
                 TextButton(onClick = { vm.screen = "settings:${child.id}" }) { Text("Ubah aturan") }
             }
-            OutlinedButton(onClick = { vm.pairChild(child) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Outlined.Link, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Hubungkan HP anak") }
-            if (child.awaitsTv) TextButton(onClick = { showDiscovery = true }, enabled = !vm.busy) { Text("Pilih TV dari HP ini") }
+            OutlinedButton(onClick = { editingAccount = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
+                Text(if (child.username == null) "Siapkan login anak" else "Ubah login anak")
+            }
         }
     }
-    if (showDiscovery) TvDiscoveryDialog(vm, onDismiss = { showDiscovery = false }) { tv ->
-        showDiscovery = false
-        vm.chooseFamilyTv(child, tv)
-    }
+    if (editingAccount) ChildAccountDialog(vm, child) { editingAccount = false }
 }
 
 @Composable private fun AddChild(vm: AppViewModel, onCreated: () -> Unit = {}) {
     var name by rememberSaveable { mutableStateOf("") }
+    var username by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     Surface(color = Soft, shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Buat profil anak", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            SectionTitle("Login anak")
             Field("Nama panggilan anak", name, { name = it.take(40) })
-            Text("Bacaan pertama Al-Ikhlas, diperiksa orang tua. Aturan bisa diubah kapan saja.", color = Muted, fontSize = 13.sp)
-            Button(onClick = { vm.addChild(name.trim()) { name = ""; onCreated() } }, enabled = !vm.busy && name.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("Buat profil & sambungkan HP") }
+            Field("Username anak", username, { username = it.take(32) }, KeyboardType.Ascii)
+            Text("Username 3–32 karakter. Gunakan huruf, angka, titik, garis bawah, atau tanda hubung.",
+                color = Muted, style = MaterialTheme.typography.bodySmall)
+            PasswordField("Kata sandi anak (min. 4 karakter)", password) { password = it.take(128) }
+            Button(
+                onClick = {
+                    vm.addChild(name.trim(), username.trim(), password) {
+                        name = ""; username = ""; password = ""; onCreated()
+                    }
+                },
+                enabled = !vm.busy && name.isNotBlank() && UsernamePattern.matches(username.trim()) && password.length in 4..128,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Buat akun anak") }
         }
     }
 }
@@ -537,7 +490,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        TaskLink("Pilih surah", vm.quran.chapter(surah)?.let { "${it.name} · ${it.verses} ayat" }.orEmpty(),
+        TaskLink("Surah awal", vm.quran.chapter(surah)?.let { "${it.name} · Anak bisa pilih surah lain" }.orEmpty(),
             Icons.AutoMirrored.Outlined.MenuBook, Sky, enabled = taskSurahs.isNotEmpty()) { showSurahs = true }
         Surface(color = Color.White, shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -600,7 +553,7 @@ class MainActivity : ComponentActivity() {
             showDiscovery = false
         },
     )
-    if (revoke) AlertDialog(onDismissRequest = { revoke = false }, title = { Text("Putuskan perangkat anak?") }, text = { Text("Semua HP ${child.name} perlu dihubungkan ulang. Izin power yang belum dipakai ikut dicabut.") }, confirmButton = { TextButton(onClick = { revoke = false; vm.revoke(child.id) }) { Text("Putuskan") } }, dismissButton = { TextButton(onClick = { revoke = false }) { Text("Batal") } })
+    if (revoke) AlertDialog(onDismissRequest = { revoke = false }, title = { Text("Putuskan perangkat anak?") }, text = { Text("Semua HP ${child.name} perlu masuk lagi. Izin TV yang belum dipakai ikut dicabut.") }, confirmButton = { TextButton(onClick = { revoke = false; vm.revoke(child.id) }) { Text("Putuskan") } }, dismissButton = { TextButton(onClick = { revoke = false }) { Text("Batal") } })
 }
 
 @Composable private fun TvDiscoveryDialog(vm: AppViewModel, onDismiss: () -> Unit, onSelect: (DiscoveredTv) -> Unit) {
@@ -657,75 +610,90 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun TvSetupScreen(vm: AppViewModel, data: Dashboard) {
     val child = data.children.firstOrNull() ?: return
-    val target = vm.setupTarget ?: child.takeUnless { it.awaitsTv }
-    var now by remember { mutableLongStateOf(vm.serverNow()) }
-    LaunchedEffect(Unit) { while (true) { now = vm.serverNow(); delay(1000) } }
-    val canChoose = child.awaitsTv && (data.tvSetupUntil ?: 0) > now
     var searching by remember { mutableStateOf(false) }
-    val needsLink = target?.tvTransport == "wifi" && !vm.tvRemote.paired(target)
+    var manual by rememberSaveable { mutableStateOf(false) }
+    val needsLink = child.tvTransport == "wifi" && !vm.tvPaired
     Column(Modifier.widthIn(max = 680.dp).fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        ReadingBanner("Siapkan TV", when {
-            vm.tvTestSent -> "Periksa hasil tes"
-            target == null -> "Pilih TV keluarga"
-            needsLink -> "Hubungkan HP ke TV"
-            else -> "Periksa sambungan"
-        }, "HP ${child.name}", Sky, Icons.Outlined.Tv)
-        when {
-            vm.tvTestSent -> {
-                Text("Apakah TV menyala?")
-                Button(onClick = vm::leaveTvSetup, modifier = Modifier.fillMaxWidth()) { Text("TV menyala") }
-                TextButton(onClick = {
-                    vm.leaveTvSetup()
-                    vm.screen = "family"
-                    vm.message = "Cek TV dari Panduan. Jika perlu, minta orang tua menyesuaikan pengaturan TV."
-                }) { Text("TV belum menyala") }
-            }
-            child.awaitsTv && !canChoose -> Text("Minta orang tua memilih TV di menu Keluarga pada HP mereka.")
-            target == null -> {
-                Text("Nyalakan TV dengan remote, lalu pastikan TV dan HP ini memakai Wi-Fi yang sama.")
-                Button(onClick = { searching = true }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Cari TV") }
-            }
-            needsLink -> {
-                Text("Nyalakan TV. Masukkan kode yang muncul atau pilih Izinkan pada layar TV jika diminta.")
-                Button(onClick = { vm.pairTv(target) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Hubungkan TV") }
-            }
-            canChoose -> {
-                Text("TV terhubung. Matikan layarnya dengan remote, lalu coba nyalakan dari sini.")
-                Button(onClick = vm::testSetupTv, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Tes nyalakan TV") }
-            }
-            else -> {
-                Text("Nyalakan TV untuk mengecek sambungan dari HP ini.")
-                Button(onClick = { vm.checkTv(target) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Cek sambungan TV") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = vm::leaveTvSetup, enabled = !vm.busy) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Kembali") }
+            SectionTitle("TV saya")
+        }
+        val detail = when {
+            child.awaitsTv -> "Nyalakan TV, lalu sambungkan HP dan TV ke Wi-Fi yang sama."
+            needsLink -> "Nyalakan TV dan ikuti petunjuk di layarnya untuk menghubungkan HP ini."
+            child.tvTransport == "wifi" -> "Pilihan Wi-Fi tersimpan di akunmu."
+            else -> "Profil infrared ${child.tvBrand.uppercase()} tersimpan di akunmu."
+        }
+        ReadingBanner(null, if (child.awaitsTv) "Pilih TV" else "Sambungan TV", detail, Sky, Icons.Outlined.Tv)
+        if (needsLink) {
+            Button(onClick = { vm.pairTv(child) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Hubungkan TV") }
+        } else if (!child.awaitsTv) {
+            OutlinedButton(onClick = { vm.checkTv(child) }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) { Text("Cek sambungan") }
+            if (child.tvTransport == "wifi" && child.tvPlatform != "wol") {
+                TextButton(onClick = { vm.pairTv(child) }, enabled = !vm.busy) { Text("Hubungkan ulang TV") }
             }
         }
-        if (!vm.tvTestSent) {
-            if (canChoose && target != null) TextButton(onClick = { searching = true }, enabled = !vm.busy) { Text("Pilih TV lain") }
-            TextButton(onClick = vm::leaveTvSetup, enabled = !vm.busy) { Text(if (child.awaitsTv) "Nanti saja" else "Kembali ke bacaan") }
-        }
+        TaskLink("Cari TV di Wi-Fi", "Pilih dari TV yang ditemukan.", Icons.Outlined.Search, Mint, enabled = !vm.busy) { searching = true }
+        TextButton(onClick = { manual = !manual }, enabled = !vm.busy) { Text(if (manual) "Tutup opsi TV" else "Opsi TV lainnya") }
+        if (manual) ManualChildTv(vm, child)
     }
-    if (searching && canChoose) TvDiscoveryDialog(vm, onDismiss = { searching = false }) { tv ->
+    if (searching) TvDiscoveryDialog(vm, onDismiss = { searching = false }) { tv ->
         searching = false
-        vm.chooseSetupTv(child, tv)
+        val mac = child.tvMac.takeIf { child.tvPlatform == tv.platform.id && child.tvHost == tv.host }.orEmpty()
+        vm.saveTv(TvSettings("none", "wifi", tv.platform.id, tv.host, mac), connect = true)
+    }
+}
+
+@Composable private fun ManualChildTv(vm: AppViewModel, child: Child) {
+    var transport by rememberSaveable(child.tvRevision) {
+        mutableStateOf(if (child.awaitsTv || !vm.infrared.available) "wifi" else child.tvTransport)
+    }
+    var brand by rememberSaveable(child.tvRevision) { mutableStateOf(if (child.tvBrand == "lg") "lg" else "samsung") }
+    var platform by rememberSaveable(child.tvRevision) {
+        mutableStateOf(if (child.tvTransport == "infrared") "androidtv" else child.tvPlatform)
+    }
+    var host by rememberSaveable(child.tvRevision) { mutableStateOf(child.tvHost) }
+    var mac by rememberSaveable(child.tvRevision) { mutableStateOf(child.tvMac) }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (vm.infrared.available) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Choice("Wi-Fi manual", transport == "wifi", Modifier.weight(1f)) { transport = "wifi" }
+            Choice("Infrared", transport == "infrared", Modifier.weight(1f)) { transport = "infrared" }
+        }
+        if (transport == "infrared") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Choice("Samsung", brand == "samsung", Modifier.weight(1f)) { brand = "samsung" }
+                Choice("LG", brand == "lg", Modifier.weight(1f)) { brand = "lg" }
+            }
+        } else {
+            listOf("androidtv" to "Android TV / Google TV", "samsung" to "Samsung Tizen", "lg" to "LG webOS", "wol" to "Wake-on-LAN").forEach { (id, label) ->
+                Choice(label, platform == id, Modifier.fillMaxWidth()) { platform = id }
+            }
+            if (platform != "wol") Field("IP lokal TV", host, { host = it.trim().take(15) }, KeyboardType.Uri)
+            Field(if (platform == "wol") "MAC Wi-Fi TV" else "MAC Wi-Fi TV (opsional)", mac, { mac = it.trim().uppercase().take(17) })
+        }
+        val valid = if (transport == "infrared") vm.infrared.available else {
+            val validMac = runCatching { WakePacket.macBytes(mac) }.isSuccess
+            if (platform == "wol") validMac else runCatching { LanAddress.parse(host) }.isSuccess && (mac.isBlank() || validMac)
+        }
+        Button(
+            onClick = {
+                val settings = if (transport == "infrared") TvSettings(brand, "infrared", "wol", "", "")
+                    else TvSettings("none", "wifi", platform, if (platform == "wol") "" else host, mac)
+                vm.saveTv(settings, connect = transport == "wifi" && platform != "wol")
+            },
+            enabled = valid && !vm.busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Simpan pilihan TV") }
     }
 }
 
 @Composable private fun Guide(vm: AppViewModel, data: Dashboard) {
-    ReadingBanner(null, "Panduan HP dan TV", "Periksa sambungan TV dan kelola pemberitahuan.", Butter, Icons.Outlined.Tv)
-    NotificationSetting(vm, parent = false)
     val child = data.children.firstOrNull() ?: return
-    if (child.awaitsTv && (data.tvSetupUntil ?: 0) <= vm.serverNow()) {
-        EmptyCard("TV belum disiapkan", "Minta orang tua memilih TV di menu Keluarga pada HP mereka.")
-    } else if (child.tvTransport == "infrared" && !child.awaitsTv && !vm.infrared.available) {
-        EmptyCard("HP ini perlu sambungan Wi-Fi", "Minta orang tua memilih Wi-Fi di pengaturan TV.")
-    } else {
-        OutlinedButton(onClick = { vm.screen = "tv-setup" }, enabled = !vm.busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (child.awaitsTv) "Siapkan TV" else "Cek sambungan TV")
-        }
-        if (child.tvTransport == "wifi" && child.tvPlatform != "wol" && vm.tvRemote.paired(child)) {
-            TextButton(onClick = { vm.pairTv(child) }, enabled = !vm.busy) { Text("Hubungkan ulang TV") }
-        }
-    }
+    ReadingBanner(null, "Panduan HP dan TV", "Kelola sambungan dan pemberitahuan.", Butter, Icons.Outlined.Tv)
+    TaskLink("TV saya", if (child.awaitsTv) "Pilih TV untuk akunmu." else "Cek sambungan atau pilih TV lain.",
+        Icons.Outlined.Tv, Sky, enabled = !vm.busy, onClick = vm::openTvSetup)
+    NotificationSetting(vm, parent = false)
     Text("Setiap bacaan yang disetujui memberi satu kali izin menyalakan TV.", color = Muted)
 }
 

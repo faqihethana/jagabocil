@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -194,8 +195,35 @@ import java.util.Locale
     )
 }
 
-@Composable private fun PasswordField(label: String, value: String, onChange: (String) -> Unit) {
+@Composable internal fun ChildAccountDialog(vm: AppViewModel, child: Child, onDismiss: () -> Unit) {
+    var username by remember(child.id) { mutableStateOf(child.username.orEmpty()) }
+    var password by remember(child.id) { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!vm.busy) onDismiss() },
+        title = { Text(if (child.username == null) "Siapkan login ${child.name}" else "Ubah login ${child.name}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Anak akan masuk dengan username dan kata sandi ini. Sesi lama di HP anak akan berakhir.")
+                OutlinedTextField(username, { username = it.take(32); error = null }, label = { Text("Username anak") },
+                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii), modifier = Modifier.fillMaxWidth())
+                PasswordField("Kata sandi anak (min. 4 karakter)", password) { password = it.take(128); error = null }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { vm.saveChildAccount(child, username.trim(), password, { error = it }, onDismiss) },
+                enabled = !vm.busy && UsernamePattern.matches(username.trim()) && password.length in 4..128,
+            ) { Text("Simpan login") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !vm.busy) { Text("Batal") } },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+    )
+}
+
+@Composable internal fun PasswordField(label: String, value: String, onChange: (String) -> Unit) {
     OutlinedTextField(value, onChange, label = { Text(label) }, singleLine = true,
         modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        visualTransformation = PasswordVisualTransformation())
+        visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(16.dp))
 }

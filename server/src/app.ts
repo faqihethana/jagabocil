@@ -21,19 +21,37 @@ const day = 86_400_000;
 const sessionDuration = 30 * day;
 const pairingDuration = 10 * 60_000;
 const setupDuration = 10 * 60_000;
+const tvSettings = z.object({
+  tvBrand: z.enum(['none', 'samsung', 'lg']),
+  tvTransport: z.enum(['infrared', 'wifi']).default('infrared'),
+  tvPlatform: z.enum(['wol', 'androidtv', 'samsung', 'lg']).default('wol'),
+  tvHost: z.string().trim().max(15).default(''),
+  tvMac: z.string().trim().toUpperCase().regex(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$|^$/).default(''),
+});
 function isPrivateIpv4(host: string) {
   if (!/^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$/.test(host)) return false;
   const [a, b, c, d] = host.split('.').map(Number);
   return [a,b,c,d].every(x => x !== undefined && x <= 255) && (a === 10 || a === 192 && b === 168 || a === 172 && b! >= 16 && b! <= 31);
 }
-type Actor = { role: 'parent' | 'child'; id: string; authRevision: number; tokenHash: string; expires: number };
-type Child = { id: string; parent_id: string; name: string; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
+type TokenRole = 'parent' | 'child' | 'child_account';
+type Actor = { role: 'parent' | 'child'; accountLogin: boolean; id: string; authRevision: number; tokenHash: string; expires: number };
+type Child = { id: string; parent_id: string; name: string; username: string | null; mode: string; surah_id: string; min_seconds: number; unlock_minutes: number; tv_brand: string; tv_transport: string; tv_mac: string; tv_platform: string; tv_host: string; ai_consent: number; revision: number; pair_hash: string | null; pair_expires: number | null };
 type Recitation = { id: string; child_id: string; surah_id: string; status: string; duration: number; path: string; mime: string; created_at: number; ready_at: number | null; reviewed_at: number | null; expires_at: number | null; used_at: number | null; feedback: string; reviewer: string | null };
 // The original consent value (1) covered Gemini. DeepSeek requires a fresh opt-in.
 const aiConsentByProvider = { gemini: 1, deepseek: 2 } as const;
 type Options = { dataDir: string; database?: Database; recordings?: RecordingStore; verify?: Verify; aiProvider?: keyof typeof aiConsentByProvider; logger?: boolean; now?: () => number; midtrans?: Midtrans };
 class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }
 const fail = (code: number, message: string): never => { throw new HttpError(code, message); };
+
+function validateTv(p: z.infer<typeof tvSettings>) {
+  if ((p.tvTransport === 'wifi' && p.tvPlatform === 'wol' || p.tvMac) &&
+      (!p.tvMac || p.tvMac === '00:00:00:00:00:00' || (parseInt(p.tvMac.slice(0, 2), 16) & 1) !== 0)) {
+    return fail(400, 'Masukkan MAC Wi-Fi TV yang valid dan bukan alamat multicast.');
+  }
+  if (p.tvTransport === 'wifi' && p.tvPlatform !== 'wol' && !isPrivateIpv4(p.tvHost)) {
+    return fail(400, 'Masukkan alamat IPv4 lokal TV yang valid.');
+  }
+}
 
 async function passwordHash(password: string, salt = randomBytes(16).toString('hex')) {
   const key = await new Promise<Buffer>((ok, no) => scrypt(password, salt, 64, (e, k) => e ? no(e) : ok(k)));
@@ -67,22 +85,29 @@ export async function createApp(options: Options) {
   async function actor(req: FastifyRequest, required?: Actor['role']): Promise<Actor> {
     const raw = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
     const tokenHash = raw ? digest(raw) : '';
-    const token = tokenHash ? await one<{ role: Actor['role']; subject_id: string; auth_revision: number; expires: number }>(
+    const token = tokenHash ? await one<{ role: TokenRole; subject_id: string; auth_revision: number; expires: number }>(
       `SELECT t.role,t.subject_id,t.auth_revision,t.expires FROM tokens t WHERE t.hash=? AND t.expires>?
-       AND (t.role='child' OR EXISTS(SELECT 1 FROM parents p WHERE p.id=t.subject_id AND p.auth_revision=t.auth_revision))`,
+       AND (t.role='child' AND EXISTS(SELECT 1 FROM children c WHERE c.id=t.subject_id AND c.username IS NULL)
+         OR t.role='child_account' AND EXISTS(SELECT 1 FROM children c WHERE c.id=t.subject_id AND c.account_revision=t.auth_revision)
+         OR t.role='parent' AND EXISTS(SELECT 1 FROM parents p WHERE p.id=t.subject_id AND p.auth_revision=t.auth_revision))`,
       tokenHash, now(),
     ) : undefined;
     if (!token) return fail(401, 'Sesi habis. Silakan masuk lagi.');
-    if (required && token.role !== required) return fail(403, required === 'parent' ? 'Hanya orang tua yang dapat mengubah ini.' : 'Gunakan HP anak untuk langkah ini.');
-    return { role: token.role, id: token.subject_id, authRevision: token.auth_revision, tokenHash, expires: token.expires };
+    const role = token.role === 'parent' ? 'parent' : 'child';
+    if (required && role !== required) return fail(403, required === 'parent' ? 'Hanya orang tua yang dapat mengubah ini.' : 'Gunakan HP anak untuk langkah ini.');
+    return { role, accountLogin: token.role === 'child_account', id: token.subject_id, authRevision: token.auth_revision, tokenHash, expires: token.expires };
   }
   const subscription = billing(app, db, now, async req => (await actor(req, 'parent')).id, options.midtrans);
-  async function newToken(role: Actor['role'], id: string, revision: number) {
+  async function newToken(role: TokenRole, id: string, revision: number) {
     const token = randomBytes(32).toString('base64url');
     const expiration = now() + sessionDuration;
     if (role === 'child') {
-      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,revision FROM children WHERE id=? AND revision=?', digest(token), role, id, expiration, id, revision);
+      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,revision FROM children WHERE id=? AND revision=? AND username IS NULL', digest(token), role, id, expiration, id, revision);
       if (!inserted.changes) return fail(409, 'Perangkat dicabut saat pairing. Minta kode baru ke orang tua.');
+    } else if (role === 'child_account') {
+      const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,account_revision FROM children WHERE id=? AND account_revision=?',
+        digest(token), role, id, expiration, id, revision);
+      if (!inserted.changes) return fail(409, 'Login anak baru saja diperbarui. Silakan masuk lagi.');
     } else {
       const inserted = await change('INSERT INTO tokens(hash,role,subject_id,expires,auth_revision) SELECT ?,?,?,?,auth_revision FROM parents WHERE id=? AND auth_revision=?',
         digest(token), role, id, expiration, id, revision);
@@ -102,7 +127,7 @@ export async function createApp(options: Options) {
     return rec;
   }
   const paramId = (req: FastifyRequest) => z.object({ id: z.string().uuid() }).parse(req.params).id;
-  const publicChild = (c: Child) => ({ id: c.id, name: c.name, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, aiConsent: hasAiConsent(c) });
+  const publicChild = (c: Child) => ({ id: c.id, name: c.name, username: c.username, mode: c.mode === 'ai' && !hasAiConsent(c) ? 'manual' : c.mode, surahId: c.surah_id, minSeconds: c.min_seconds, unlockMinutes: c.unlock_minutes, tvBrand: c.tv_brand, tvTransport: c.tv_transport, tvMac: c.tv_mac, tvPlatform: c.tv_platform, tvHost: c.tv_host, tvRevision: c.revision, aiConsent: hasAiConsent(c) });
   const publicRec = (r: Recitation) => ({ id: r.id, childId: r.child_id, surahId: r.surah_id, status: r.status, duration: r.duration, createdAt: r.created_at, readyAt: r.ready_at, reviewedAt: r.reviewed_at, expiresAt: r.expires_at, usedAt: r.used_at, feedback: r.feedback, reviewer: r.reviewer });
   const awaitingTv = (c: Child) => c.tv_transport === 'infrared' && c.tv_brand === 'none';
   // The capability belongs to a recently paired device and the policy revision it received.
@@ -140,6 +165,12 @@ export async function createApp(options: Options) {
     username: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/),
     password: newPassword,
   });
+  const profileName = z.object({ name: z.string().trim().min(1).max(40) });
+  async function checkChildLimit(parentId: string) {
+    if ((await one<{ n: number }>('SELECT COUNT(*) n FROM children WHERE parent_id=?', parentId))!.n >= 10) {
+      return fail(400, 'Maksimal 10 profil anak.');
+    }
+  }
   app.post('/auth/register', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (req, reply) => {
     const data = registration.parse(req.body);
     const hashed = await passwordHash(data.password);
@@ -157,6 +188,15 @@ export async function createApp(options: Options) {
     const valid = p ? await passwordMatches(data.password, p.password) : (await passwordHash(data.password), false);
     if (!p || !valid) return fail(401, 'Username atau kata sandi kurang tepat.');
     return { token: (await newToken('parent', p.id, p.auth_revision)), role: 'parent', name: p.name };
+  });
+  app.post('/auth/child/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async req => {
+    const { username, password } = credentials.parse(req.body);
+    const child = await one<{ id: string; name: string; password: string; account_revision: number }>(
+      'SELECT id,name,password,account_revision FROM children WHERE username=? AND password IS NOT NULL', username.toLowerCase(),
+    );
+    const valid = child ? await passwordMatches(password, child.password) : (await passwordHash(password), false);
+    if (!child || !valid) return fail(401, 'Username atau kata sandi kurang tepat.');
+    return { token: await newToken('child_account', child.id, child.account_revision), role: 'child', name: child.name };
   });
   app.post('/auth/recovery-code', { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } }, async req => {
     const a = await actor(req, 'parent');
@@ -187,33 +227,65 @@ export async function createApp(options: Options) {
   });
   app.post('/children', async (req, reply) => {
     const a = await actor(req, 'parent');
-    const { name } = z.object({ name: z.string().trim().min(1).max(40) }).parse(req.body);
-    if ((await one<{ n: number }>('SELECT COUNT(*) n FROM children WHERE parent_id=?', a.id))!.n >= 10) return fail(400, 'Maksimal 10 profil anak.');
+    const { name } = profileName.parse(req.body);
+    await checkChildLimit(a.id);
     const id = randomUUID();
     await change('INSERT INTO children(id,parent_id,name) VALUES(?,?,?)', id, a.id, name);
     return reply.code(201).send({ child: publicChild((await childFor(a, id))), pairing: (await pairing(id)) });
   });
-  app.post('/children/:id/pairing', async req => { const a = await actor(req, 'parent'); const c = (await childFor(a, paramId(req))); return { pairing: (await pairing(c.id)) }; });
+  app.post('/children/accounts', async (req, reply) => {
+    const a = await actor(req, 'parent');
+    const { name, username, password } = registration.extend(profileName.shape).parse(req.body);
+    await checkChildLimit(a.id);
+    const id = randomUUID();
+    try {
+      await change('INSERT INTO children(id,parent_id,name,username,password) VALUES(?,?,?,?,?)',
+        id, a.id, name, username.toLowerCase(), await passwordHash(password));
+    } catch (error) {
+      if ((error as Error).message.includes('UNIQUE')) return fail(409, 'Username anak sudah dipakai. Pilih username lain.');
+      throw error;
+    }
+    return reply.code(201).send({ child: publicChild(await childFor(a, id)) });
+  });
+  app.put('/children/:id/account', async req => {
+    const a = await actor(req, 'parent'); const c = await childFor(a, paramId(req));
+    const { username, password } = registration.parse(req.body);
+    try {
+      await db.batch([
+        { sql: 'UPDATE children SET username=?,password=?,account_revision=account_revision+1,revision=revision+1,pair_hash=NULL,pair_expires=NULL WHERE id=?',
+          values: [username.toLowerCase(), await passwordHash(password), c.id] },
+        { sql: "DELETE FROM tokens WHERE subject_id=? AND (role='child' OR role='child_account')", values: [c.id] },
+      ]);
+    } catch (error) {
+      if ((error as Error).message.includes('UNIQUE')) return fail(409, 'Username anak sudah dipakai. Pilih username lain.');
+      throw error;
+    }
+    return { child: publicChild(await childFor(a, c.id)) };
+  });
+  app.post('/children/:id/pairing', async req => {
+    const a = await actor(req, 'parent'); const c = await childFor(a, paramId(req));
+    if (c.username !== null) return fail(409, 'Anak sudah memiliki akun. Masuk dengan username dan kata sandi anak.');
+    return { pairing: await pairing(c.id) };
+  });
   app.post('/pair', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async req => {
     const { code } = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body);
-    const c = (await one<Child>('UPDATE children SET pair_hash=NULL,pair_expires=NULL WHERE pair_hash=? AND pair_expires>? RETURNING *', digest(code), now()));
+    const c = (await one<Child>('UPDATE children SET pair_hash=NULL,pair_expires=NULL WHERE pair_hash=? AND pair_expires>? AND username IS NULL RETURNING *', digest(code), now()));
     if (!c) return fail(400, 'Kode salah atau kedaluwarsa. Minta kode baru ke orang tua.');
     return { token: (await newToken('child', c.id, c.revision)), role: 'child', name: c.name };
   });
   app.delete('/children/:id/devices', async req => {
     const a = await actor(req, 'parent'); const c = (await childFor(a, paramId(req)));
     await db.batch([
-      { sql: 'DELETE FROM tokens WHERE subject_id=?', values: [c.id] },
-      { sql: 'UPDATE children SET pair_hash=NULL,pair_expires=NULL,revision=revision+1 WHERE id=?', values: [c.id] },
+      { sql: 'UPDATE children SET pair_hash=NULL,pair_expires=NULL,revision=revision+1,account_revision=account_revision+1 WHERE id=?', values: [c.id] },
+      { sql: "DELETE FROM tokens WHERE subject_id=? AND (role='child' OR role='child_account')", values: [c.id] },
       { sql: "UPDATE recitations SET status='rejected',reviewed_at=NULL,feedback='Izin dicabut orang tua.' WHERE child_id=? AND used_at IS NULL AND status IN ('pending','approved')", values: [c.id] },
     ]);
     return { ok: true };
   });
   app.put('/children/:id/policy', async req => {
     const a = await actor(req, 'parent'); const c = (await childFor(a, paramId(req)));
-    const p = z.object({ mode: z.enum(['manual', 'ai']), surahId: z.string().refine(isTaskSurah), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), tvBrand: z.enum(['none', 'samsung', 'lg']), aiConsent: z.boolean(), tvPlatform: z.enum(['wol', 'androidtv', 'samsung', 'lg']).default('wol'), tvHost: z.string().trim().max(15).default(''), tvTransport: z.enum(['infrared', 'wifi']).default('infrared'), tvMac: z.string().trim().toUpperCase().regex(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$|^$/).default('') }).parse(req.body);
-    if ((p.tvTransport === 'wifi' && p.tvPlatform === 'wol' || p.tvMac) && (!p.tvMac || p.tvMac === '00:00:00:00:00:00' || (parseInt(p.tvMac.slice(0, 2), 16) & 1) !== 0)) return fail(400, 'Masukkan MAC Wi-Fi TV yang valid dan bukan alamat multicast.');
-    if (p.tvTransport === 'wifi' && p.tvPlatform !== 'wol' && !isPrivateIpv4(p.tvHost)) return fail(400, 'Masukkan alamat IPv4 lokal TV yang valid.');
+    const p = tvSettings.extend({ mode: z.enum(['manual', 'ai']), surahId: z.string().refine(isTaskSurah), minSeconds: z.number().int().min(10).max(120), unlockMinutes: z.number().int().min(1).max(60), aiConsent: z.boolean() }).parse(req.body);
+    validateTv(p);
     if (p.mode === 'ai' && (!p.aiConsent || !aiProvider)) return fail(400, 'AI perlu persetujuan orang tua dan konfigurasi server.');
     const consent = p.mode === 'ai' && aiProvider ? aiConsentByProvider[aiProvider] : 0;
     await db.batch([
@@ -233,7 +305,7 @@ export async function createApp(options: Options) {
     const surahs = localQuran ? [] : legacySurahs([...children.map(c => c.surah_id), ...recs.map(r => r.surah_id)]);
     const plan = a.role === 'parent' ? await subscription.summary(a.id) : null;
     const firstChild = children[0];
-    const setup = a.role === 'child' && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
+    const setup = a.role === 'child' && !a.accountLogin && firstChild && awaitingTv(firstChild) && firstChild.revision === a.authRevision && tvSetupUntil(a) > now();
     return { role: a.role, name: parent?.name ?? children[0]!.name, recoveryConfigured: !!parent?.recovery_hash, aiAvailable: aiProvider !== null, aiProvider, children: children.map(publicChild), recitations: recs.map(publicRec), surahs, juz30Tasks: true, quranNotice: localQuran ? undefined : quranNotice, serverTime: now(), billing: plan, tvSetupUntil: setup ? tvSetupUntil(a) : null };
   });
   app.post('/recitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (req, reply) => {
@@ -244,7 +316,10 @@ export async function createApp(options: Options) {
       if (part.type === 'file') { buffer = await part.toBuffer(); if (part.file.truncated) return fail(413, 'Rekaman maksimal 10 MB.'); }
       else if (part.fieldname === 'surahId') surahId = String(part.value);
     }
-    if (!buffer?.length || surahId !== c.surah_id) return fail(400, 'Kirim rekaman sesuai surah tugasmu.');
+    const selfSelected = (req.query as { selection?: string }).selection === 'self';
+    if (!buffer?.length || !surahId || (selfSelected ? !isTaskSurah(surahId) : surahId !== c.surah_id)) {
+      return fail(400, selfSelected ? 'Pilih surah Juz 30 dan sertakan rekaman bacaanmu.' : 'Kirim rekaman sesuai surah tugasmu.');
+    }
     const maxSeconds = taskRecordingLimit(surahId);
     const id = randomUUID(); const path = join(dataDir, 'tmp', `${id}.audio`);
     await writeFile(path, buffer, { mode: 0o600 });
@@ -310,10 +385,25 @@ export async function createApp(options: Options) {
     await change('DELETE FROM recitations WHERE id=?', r.id);
     return { ok: true };
   });
+  app.put('/child/tv', async req => {
+    const a = await actor(req, 'child');
+    const p = tvSettings.parse(req.body);
+    validateTv(p);
+    const child = await one<Child>(
+      `UPDATE children AS c SET tv_brand=?,tv_transport=?,tv_platform=?,tv_host=?,tv_mac=?,revision=revision+1
+       WHERE c.id=? AND EXISTS(SELECT 1 FROM tokens t WHERE t.hash=? AND t.expires>?
+         AND (t.role='child' AND c.username IS NULL OR t.role='child_account' AND t.auth_revision=c.account_revision))
+       RETURNING *`,
+      p.tvBrand, p.tvTransport, p.tvPlatform, p.tvHost, p.tvMac, a.id, a.tokenHash, now(),
+    );
+    if (!child) return fail(401, 'Sesi habis. Silakan masuk lagi.');
+    return { child: publicChild(child) };
+  });
   app.post('/tv/setup', async req => {
     const a = await actor(req, 'child');
     const { platform, host } = z.object({ platform: z.enum(['androidtv', 'samsung', 'lg']), host: z.string().max(15).refine(isPrivateIpv4) }).parse(req.body);
     const at = now();
+    if (a.accountLogin) return fail(403, 'Untuk menyalakan TV, kirim bacaan dan tunggu persetujuan.');
     if (tvSetupUntil(a) <= at) return fail(409, 'Waktu tes TV habis. Minta orang tua membuat kode sambung baru.');
     const updated = await one<Child>(
       `UPDATE children AS c SET tv_transport='wifi',tv_platform=?,tv_host=?,tv_mac='',revision=revision+1
@@ -326,12 +416,14 @@ export async function createApp(options: Options) {
   });
   app.post('/tv/authorize', async req => {
     const a = await actor(req, 'child');
-    const { recitationId, tvTransport } = z.object({ recitationId: z.string().uuid(), tvTransport: z.enum(['infrared', 'wifi']).default('infrared') }).parse(req.body);
+    const { recitationId, tvTransport, tvRevision } = z.object({ recitationId: z.string().uuid(), tvTransport: z.enum(['infrared', 'wifi']).default('infrared'), tvRevision: z.number().int().nonnegative().optional() }).parse(req.body);
     const r = (await recFor(a, recitationId)); const c = (await childFor(a, a.id));
-    if (tvTransport !== c.tv_transport) return fail(409, 'Metode koneksi TV berubah. Muat ulang aplikasi dan pengaturan.');
-    if (c.tv_transport === 'infrared' && c.tv_brand === 'none') return fail(400, 'Minta orang tua memilih profil TV dulu.');
-    if (c.tv_transport === 'wifi' && (c.tv_platform === 'wol' ? !c.tv_mac : !isPrivateIpv4(c.tv_host))) return fail(400, 'Minta orang tua melengkapi pengaturan Wi-Fi TV dulu.');
-    const used = (await change("UPDATE recitations SET used_at=? WHERE id=? AND child_id=? AND status='approved' AND used_at IS NULL AND expires_at>? AND created_at>?", now(), r.id, c.id, now(), now() - 7 * day));
+    if (tvTransport !== c.tv_transport || tvRevision !== undefined && tvRevision !== c.revision) return fail(409, 'Pengaturan TV berubah. Muat ulang lalu coba lagi.');
+    if (c.tv_transport === 'infrared' && c.tv_brand === 'none') return fail(400, 'Pilih TV dulu.');
+    if (c.tv_transport === 'wifi' && (c.tv_platform === 'wol' ? !c.tv_mac : !isPrivateIpv4(c.tv_host))) return fail(400, 'Lengkapi sambungan Wi-Fi TV dulu.');
+    const used = await change(`UPDATE recitations SET used_at=? WHERE id=? AND child_id=? AND status='approved'
+      AND used_at IS NULL AND expires_at>? AND created_at>? AND EXISTS(SELECT 1 FROM children c WHERE c.id=? AND c.revision=?)`,
+      now(), r.id, c.id, now(), now() - 7 * day, c.id, c.revision);
     if (!used.changes) return fail(403, 'Ngaji perlu disetujui dulu. Izin hanya berlaku sekali dan bisa kedaluwarsa.');
     return powerPermit(c);
   });
