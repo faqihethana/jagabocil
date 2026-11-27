@@ -129,3 +129,7 @@ server/src/    autentikasi, keluarga, rekaman privat, keputusan, izin, adapter A
 server/test/   pengujian integrasi API
 compose.yaml   API dengan volume persisten untuk self-hosting
 ```
+
+## Lisensi
+
+Kode asli JagaBocil dilisensikan dengan [MIT](LICENSE). Materi pihak ketiga, termasuk teks Al-Qur’an dari Tanzil, fon Amiri Quran dan Outfit, serta Gradle Wrapper, mengikuti ketentuan lisensinya masing-masing.
